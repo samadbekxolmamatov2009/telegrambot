@@ -1,4 +1,4 @@
-# FiribTekshir — Telegram firibgarlik ovchisi
+# HaloskorTekshir — Telegram firibgarlik ovchisi
 
 Shubhali xabar, havola yoki fayl (.apk / .zip) ni tekshirib, xavf darajasini
 o'zbek tilida tushuntiradigan bot.
