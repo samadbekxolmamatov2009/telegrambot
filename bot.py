@@ -1,6 +1,9 @@
-"""FiribTekshir — Telegram firibgarlik ovchisi. Asosiy bot (skelet)."""
+"""FiribTekshir — Telegram firibgarlik ovchisi. Asosiy bot."""
 import asyncio
 import logging
+import os
+import shutil
+import tempfile
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import CommandStart, Command
@@ -39,6 +42,37 @@ def _advice(verdict):
     if verdict == "yellow":
         return "⚠️ Ishonchingiz komil bo'lmasa, ochmang."
     return "ℹ️ Baribir ehtiyot bo'ling — bot 100% kafolat bermaydi."
+
+
+def format_apk(verdict, score, info):
+    bars = "🟥" * (score // 20) + "⬜" * (5 - score // 20)
+    lines = [
+        f"{EMOJI[verdict]} <b>{LABEL[verdict]}</b> — {score}/100",
+        bars,
+        "",
+        f"📦 <b>{info['name']}</b>",
+        f"<code>{info['package']}</code> · v{info['version']}",
+    ]
+    if info["dangerous"]:
+        lines.append("\n⚠️ <b>Bu ilova nima qila oladi:</b>")
+        for _p, desc in info["dangerous"][:8]:
+            lines.append(f"• {desc}")
+    if info["behaviors"]:
+        lines.append("\n🔎 <b>Kodda topilgani:</b>")
+        for b in info["behaviors"]:
+            lines.append(f"• {b}")
+    if info["tokens"]:
+        lines.append("\n📡 <b>Yashirin Telegram tokeni topildi:</b>")
+        for t in info["tokens"]:
+            lines.append(f"• <code>{t}</code>")
+        lines.append("<i>Ma'lumotingiz shu bot orqali begonaga ketishi mumkin.</i>")
+    if info["urls"]:
+        lines.append("\n🌐 <b>Bog'lanadigan manzillar:</b>")
+        for u in info["urls"][:5]:
+            lines.append(f"• <code>{u}</code>")
+    lines.append(f"\n🔑 SHA-256: <code>{info['sha256'][:16]}…</code>")
+    lines.append("\n" + _advice(verdict))
+    return "\n".join(lines)
 
 
 def again_kb():
@@ -112,9 +146,30 @@ async def on_file(m: Message):
                        f"Men {config.MAX_FILE_MB} MB gacha tekshira olaman.")
         return
     if name.endswith(".apk"):
-        await m.answer("⏳ APK tahlil qilyapman... (ruxsatlar, kod, tokenlar)")
-        # TODO: faylni yuklab olish + analyzers.check_apk(path)
-        await m.answer("🧩 APK moduli keyingi bosqichda ulanadi.")
+        status = await m.answer("⏳ APK tahlil qilyapman... (ruxsatlar, kod, tokenlar)")
+        tmp = tempfile.mkdtemp()
+        apk_path = os.path.join(tmp, "app.apk")
+        try:
+            await bot.download(m.document, destination=apk_path)
+            verdict, score, info = await asyncio.to_thread(
+                analyzers.check_apk, apk_path)
+            await db.log_check(m.from_user.id, "apk", verdict, score,
+                               f"{info['name']} ({info['package']})")
+            for t in info["tokens"]:
+                try:
+                    await db.save_token(t, info["package"])
+                except Exception:
+                    pass
+            await m.answer(format_apk(verdict, score, info),
+                           parse_mode="HTML", reply_markup=again_kb())
+        except Exception as e:
+            logging.exception("APK tahlil xatosi")
+            await m.answer(f"⚠️ Bu faylni tahlil qila olmadim.\n"
+                           f"Sabab: <code>{e}</code>\n\n"
+                           f"Fayl buzilgan yoki haqiqiy APK bo'lmasligi mumkin — "
+                           f"baribir ehtiyot bo'ling.", parse_mode="HTML")
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
     elif name.endswith((".zip", ".rar", ".7z")):
         await m.answer("🔐 Arxiv parolli bo'lsa, 2 daqiqa parol sinab ko'raman.")
         # TODO: analyzers.check_archive(...)
