@@ -3,7 +3,7 @@ import asyncio
 import logging
 
 from aiogram import Bot, Dispatcher, F
-from aiogram.filters import CommandStart
+from aiogram.filters import CommandStart, Command
 from aiogram.types import (
     Message, InlineKeyboardMarkup, InlineKeyboardButton,
 )
@@ -58,6 +58,39 @@ async def start(m: Message):
         "• 📎 Shubhali <b>fayl</b> (.apk yoki .zip)\n\n"
         "Men xavfli yoki xavfsizligini o'zbek tilida tushuntiraman.\n\n"
         "<i>Masalan: \"Kartangiz bloklandi, kodni yuboring\" deb yozib ko'ring.</i>",
+        parse_mode="HTML",
+    )
+
+
+@dp.message(Command("id"))
+async def my_id(m: Message):
+    """O'z Telegram ID'ingizni ko'rsatadi (admin ID'ni bilish uchun)."""
+    is_admin = m.from_user.id in config.ADMIN_IDS
+    await m.answer(
+        f"🆔 Sizning ID: <code>{m.from_user.id}</code>\n"
+        f"{'✅ Siz adminsiz' if is_admin else '❌ Siz admin emassiz'}",
+        parse_mode="HTML",
+    )
+
+
+@dp.message(Command("admin"))
+async def admin_panel(m: Message):
+    """Faqat adminlar uchun — umumiy statistika."""
+    if m.from_user.id not in config.ADMIN_IDS:
+        await m.answer("❌ Bu bo'lim faqat adminlar uchun.")
+        return
+    try:
+        s = await db.stats()
+    except Exception as e:
+        await m.answer(f"⚠️ Bazadan o'qishda xato: {e}")
+        return
+    await m.answer(
+        "🛠 <b>Admin panel</b>\n\n"
+        f"📊 Jami tekshiruvlar: <b>{s['total']}</b>\n"
+        f"👥 Foydalanuvchilar: <b>{s['users']}</b>\n\n"
+        f"{config.RED} Xavfli: {s['red']}\n"
+        f"{config.YELLOW} Shubhali: {s['yellow']}\n"
+        f"{config.GREEN} Xavfsiz: {s['green']}",
         parse_mode="HTML",
     )
 
