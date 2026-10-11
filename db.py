@@ -6,11 +6,25 @@ import config
 _client = None
 
 
+def _normalize_url(url: str) -> str:
+    """libsql:// (websocket) o'rniga https:// (HTTP) — barqarorroq va
+    xatolarni aniq ko'rsatadi (noto'g'ri token -> 401, 400 emas)."""
+    url = url.strip()
+    if url.startswith("libsql://"):
+        url = "https://" + url[len("libsql://"):]
+    elif url.startswith("wss://"):
+        url = "https://" + url[len("wss://"):]
+    elif url.startswith("ws://"):
+        url = "http://" + url[len("ws://"):]
+    return url
+
+
 def _c():
     global _client
     if _client is None:
         _client = libsql_client.create_client(
-            url=config.TURSO_URL, auth_token=config.TURSO_TOKEN
+            url=_normalize_url(config.TURSO_URL),
+            auth_token=config.TURSO_TOKEN.strip(),
         )
     return _client
 
