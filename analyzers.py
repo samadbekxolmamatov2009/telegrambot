@@ -279,7 +279,82 @@ def check_apk(path: str) -> tuple:
     return verdict, score, info
 
 
-# ── Parolli arxiv (keyingi bosqich — pyzipper) ────────────────────
-def check_archive(path: str, passwords: list[str]):
-    """Keyingi milestone: 2 daqiqa parol sinash, ochilsa APK tahlili."""
-    raise NotImplementedError("Arxiv moduli keyingi bosqichda to'ldiriladi")
+# ── Parolli arxiv (.zip) ──────────────────────────────────────────
+COMMON_PW = ["1234", "12345", "123456", "0000", "1111", "123123",
+             "password", "parol", "qwerty", "admin", "infected", "virus",
+             "12345678", "000000", "111111", "123", "apk"]
+
+
+def check_archive(path: str, passwords=None):
+    """ZIP ichidan APK topib tahlil qiladi. Parolli bo'lsa, berilgan va
+    oddiy parollarni sinaydi. Qaytaradi: dict (status + ma'lumot)."""
+    import os
+    import tempfile
+    import pyzipper
+
+    try:
+        z = pyzipper.AESZipFile(path)
+    except Exception as e:
+        return {"status": "error", "error": str(e)}
+
+    with z:
+        infos = z.infolist()
+        names = [i.filename for i in infos]
+        encrypted = any(i.flag_bits & 0x1 for i in infos)
+        # ZIP-bomba himoyasi
+        total = sum(i.file_size for i in infos)
+        if total > 300 * 1024 * 1024:
+            return {"status": "error", "error": "arxiv juda katta (ZIP-bomba?)"}
+
+        apk_names = [n for n in names if n.lower().endswith(".apk")]
+        if not apk_names:
+            return {"status": "no_apk", "names": names[:20],
+                    "encrypted": encrypted}
+
+        target = apk_names[0]
+        pw_used = None
+        data = None
+        pw_list = list(passwords or []) + COMMON_PW
+        if encrypted:
+            for pw in pw_list:
+                try:
+                    z.setpassword(pw.encode())
+                    data = z.read(target)
+                    pw_used = pw
+                    break
+                except Exception:
+                    continue
+            if data is None:
+                return {"status": "locked", "apk_name": target,
+                        "names": names[:20]}
+        else:
+            try:
+                data = z.read(target)
+            except Exception as e:
+                return {"status": "error", "error": str(e)}
+
+    # Topilgan APK'ni vaqtincha yozib tahlil qilamiz
+    tmp = tempfile.mkdtemp()
+    apk_path = os.path.join(tmp, "inner.apk")
+    try:
+        with open(apk_path, "wb") as f:
+            f.write(data)
+        verdict, score, info = check_apk(apk_path)
+    except Exception as e:
+        return {"status": "error", "error": str(e), "password": pw_used}
+    finally:
+        try:
+            os.remove(apk_path)
+            os.rmdir(tmp)
+        except Exception:
+            pass
+
+    # Arxiv ichida yashiringanning o'zi — qo'shimcha shubha
+    info.setdefault("behaviors", [])
+    if "Arxiv ichiga yashiringan" not in info["behaviors"]:
+        info["behaviors"].insert(0, "Arxiv ichiga yashiringan")
+    if score < 35:
+        score = 35  # arxivda yashirilgan ilova hech bo'lmasa shubhali
+        verdict = "yellow"
+    return {"status": "apk", "verdict": verdict, "score": score,
+            "info": info, "password": pw_used, "apk_name": target}

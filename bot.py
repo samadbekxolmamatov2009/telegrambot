@@ -431,10 +431,57 @@ async def on_file(m: Message):
                            f"baribir ehtiyot bo'ling.", parse_mode="HTML")
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
-    elif name.endswith((".zip", ".rar", ".7z")):
-        await m.answer("🔐 Arxiv parolli bo'lsa, 2 daqiqa parol sinab ko'raman.")
-        # TODO: analyzers.check_archive(...)
-        await m.answer("🧩 Arxiv moduli keyingi bosqichda ulanadi.")
+    elif name.endswith(".zip"):
+        await m.answer("🔐 Arxivni ochyapman va ichidagini tekshiryapman...")
+        tmp = tempfile.mkdtemp()
+        zip_path = os.path.join(tmp, "a.zip")
+        try:
+            await bot.download(m.document, destination=zip_path)
+            # Parol: fayl izohidan (caption) olinadi, agar bo'lsa
+            pw = (m.caption or "").split() if m.caption else []
+            res = await asyncio.to_thread(analyzers.check_archive, zip_path, pw)
+            st = res.get("status")
+            if st == "apk":
+                info = res["info"]
+                LAST_APK[m.from_user.id] = info
+                await db.log_check(m.from_user.id, "archive", res["verdict"],
+                                   res["score"], f"{info['name']} (arxivда)")
+                for t in info.get("tokens", []):
+                    try:
+                        await db.save_token(t, info["package"])
+                    except Exception:
+                        pass
+                pwnote = (f"\n🔓 Parol topildi: <code>{res['password']}</code>"
+                          if res.get("password") else "")
+                await m.answer("📦 Arxiv ichida ilova (.apk) topildi va tekshirildi:"
+                               + pwnote, parse_mode="HTML")
+                await m.answer(format_apk(res["verdict"], res["score"], info),
+                               parse_mode="HTML", reply_markup=apk_kb())
+            elif st == "locked":
+                await m.answer(
+                    "🔒 <b>Arxiv parol bilan yopilgan.</b>\n\n"
+                    "Ichida ilova bor, lekin oddiy parollar bilan ocholmadim.\n"
+                    "Agar yuboruvchi parol yozgan bo'lsa — faylni <b>izoh "
+                    "(caption)</b> sifatida parol bilan qayta yuboring.\n\n"
+                    "⚠️ Rasm/video o'rniga parolli arxivda ilova kelishi — "
+                    "bu allaqachon shubhali.", parse_mode="HTML")
+            elif st == "no_apk":
+                await m.answer("ℹ️ Arxiv ichida ilova (.apk) topilmadi.\n"
+                               "Ichidagilar: " +
+                               ", ".join(res.get("names", [])[:10]))
+            else:
+                await m.answer(f"⚠️ Arxivni ocholmadim: "
+                               f"<code>{res.get('error', 'nomalum')}</code>",
+                               parse_mode="HTML")
+        except Exception as e:
+            logging.exception("Arxiv tahlil xatosi")
+            await m.answer(f"⚠️ Arxivni tahlil qila olmadim: <code>{e}</code>",
+                           parse_mode="HTML")
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+    elif name.endswith((".rar", ".7z")):
+        await m.answer("ℹ️ Hozircha faqat .zip arxivlarni ocha olaman. "
+                       "RAR/7z keyingi versiyada.")
     else:
         await m.answer("Men hozircha .apk va .zip fayllarni tekshiraman.")
 
