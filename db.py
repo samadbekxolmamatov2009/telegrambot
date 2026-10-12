@@ -74,10 +74,43 @@ async def stats():
     )
     by_verdict = {row[0]: row[1] for row in r.rows}
     total = await _c().execute("SELECT COUNT(*), COUNT(DISTINCT user_id) FROM checks")
+    day_ago = int(time.time()) - 86400
+    today = await _c().execute(
+        "SELECT COUNT(*) FROM checks WHERE created > ?", [day_ago])
+    by_kind = await _c().execute(
+        "SELECT kind, COUNT(*) FROM checks GROUP BY kind")
+    ntok = await _c().execute("SELECT COUNT(*) FROM found_tokens")
     return {
         "total": total.rows[0][0],
         "users": total.rows[0][1],
+        "today": today.rows[0][0],
         "green": by_verdict.get("green", 0),
         "yellow": by_verdict.get("yellow", 0),
         "red": by_verdict.get("red", 0),
+        "by_kind": {row[0]: row[1] for row in by_kind.rows},
+        "tokens": ntok.rows[0][0],
     }
+
+
+async def recent(limit=8):
+    """Oxirgi tekshiruvlar."""
+    r = await _c().execute(
+        "SELECT kind, verdict, score, detail, created FROM checks "
+        "ORDER BY id DESC LIMIT ?", [limit])
+    return r.rows
+
+
+async def top_threats(limit=6):
+    """Eng ko'p uchragan xavfli tekshiruvlar."""
+    r = await _c().execute(
+        "SELECT detail, COUNT(*) c FROM checks WHERE verdict='red' "
+        "GROUP BY detail ORDER BY c DESC LIMIT ?", [limit])
+    return r.rows
+
+
+async def list_tokens(limit=10):
+    """Topilgan firibgar tokenlari."""
+    r = await _c().execute(
+        "SELECT token, source, created FROM found_tokens "
+        "ORDER BY id DESC LIMIT ?", [limit])
+    return r.rows

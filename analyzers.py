@@ -120,8 +120,10 @@ def check_apk(path: str) -> tuple:
         "urls": [],
     }
 
+    import os
     with open(path, "rb") as f:
         info["sha256"] = hashlib.sha256(f.read()).hexdigest()
+    info["size_kb"] = round(os.path.getsize(path) / 1024)
 
     # Xavfli ruxsatlar
     for p in perms:

@@ -8,7 +8,7 @@ import tempfile
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import CommandStart, Command
 from aiogram.types import (
-    Message, InlineKeyboardMarkup, InlineKeyboardButton,
+    Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton,
 )
 
 import config
@@ -44,35 +44,70 @@ def _advice(verdict):
     return "ℹ️ Baribir ehtiyot bo'ling — bot 100% kafolat bermaydi."
 
 
+# Oxirgi APK hisoboti (foydalanuvchi bo'yicha) — "to'liq ruxsatlar" tugmasi uchun
+LAST_APK = {}
+
+# Verdict'ga qarab bir qatorlik izoh
+VERDICT_SUMMARY = {
+    "red": "Bu ilova xavfli. Uni o'rnatmang va ishonchli odamdan kelgan bo'lsa ham tekshiring.",
+    "yellow": "Bu ilova shubhali. Kelib chiqishiga ishonchingiz komil bo'lmasa, o'rnatmang.",
+    "green": "Ochiq xavf topilmadi. Lekin bu 100% xavfsiz degani emas — ehtiyot bo'ling.",
+}
+
+
 def format_apk(verdict, score, info):
-    bars = "🟥" * (score // 20) + "⬜" * (5 - score // 20)
+    full = score // 10
+    bars = "🟥" * full + "⬜" * (10 - full)
     lines = [
-        f"{EMOJI[verdict]} <b>{LABEL[verdict]}</b> — {score}/100",
+        f"{EMOJI[verdict]} <b>{LABEL[verdict]}</b>",
+        f"Xavf darajasi: <b>{score}/100</b>",
         bars,
         "",
-        f"📦 <b>{info['name']}</b>",
-        f"<code>{info['package']}</code> · v{info['version']}",
+        f"<i>{VERDICT_SUMMARY[verdict]}</i>",
+        "",
+        "📦 <b>Ilova haqida</b>",
+        f"• Nomi: <b>{info['name']}</b>",
+        f"• Paket: <code>{info['package']}</code>",
+        f"• Versiya: {info['version']}",
+        f"• Hajmi: {info.get('size_kb', '?')} KB",
     ]
+
     if info["dangerous"]:
-        lines.append("\n⚠️ <b>Bu ilova nima qila oladi:</b>")
-        for _p, desc in info["dangerous"][:8]:
+        lines.append("\n⚠️ <b>Bu ilova nima qila oladi</b>")
+        for _p, desc in info["dangerous"]:
             lines.append(f"• {desc}")
+
     if info["behaviors"]:
-        lines.append("\n🔎 <b>Kodda topilgani:</b>")
+        lines.append("\n🔎 <b>Kodni tekshirganda topildi</b>")
         for b in info["behaviors"]:
             lines.append(f"• {b}")
+
     if info["tokens"]:
-        lines.append("\n📡 <b>Yashirin Telegram tokeni topildi:</b>")
+        lines.append("\n📡 <b>Yashirin Telegram tokeni topildi</b>")
         for t in info["tokens"]:
             lines.append(f"• <code>{t}</code>")
-        lines.append("<i>Ma'lumotingiz shu bot orqali begonaga ketishi mumkin.</i>")
+        lines.append("<i>O'g'irlangan ma'lumot shu bot orqali begonaga yuborilishi mumkin.</i>")
+
     if info["urls"]:
-        lines.append("\n🌐 <b>Bog'lanadigan manzillar:</b>")
+        lines.append("\n🌐 <b>Bog'lanadigan manzillar</b>")
         for u in info["urls"][:5]:
             lines.append(f"• <code>{u}</code>")
-    lines.append(f"\n🔑 SHA-256: <code>{info['sha256'][:16]}…</code>")
+
+    nperm = len(info.get("permissions", []))
+    lines.append(f"\n📋 Jami <b>{nperm} ta</b> ruxsat so'raydi "
+                 f"(to'liq ro'yxat uchun pastdagi tugma)")
+    lines.append(f"🔑 SHA-256:\n<code>{info['sha256']}</code>")
     lines.append("\n" + _advice(verdict))
     return "\n".join(lines)
+
+
+def apk_kb():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📋 To'liq ruxsatlar ro'yxati",
+                              callback_data="apk_perms")],
+        [InlineKeyboardButton(text="🔍 Yana tekshir", callback_data="again"),
+         InlineKeyboardButton(text="📤 Do'stga ulash", switch_inline_query="")],
+    ])
 
 
 def again_kb():
@@ -107,26 +142,98 @@ async def my_id(m: Message):
     )
 
 
+def admin_kb():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📊 Umumiy", callback_data="adm_stats"),
+         InlineKeyboardButton(text="🕐 Oxirgilari", callback_data="adm_recent")],
+        [InlineKeyboardButton(text="🔴 Top xavflar", callback_data="adm_threats"),
+         InlineKeyboardButton(text="📡 Tokenlar", callback_data="adm_tokens")],
+    ])
+
+
+async def admin_stats_text():
+    s = await db.stats()
+    bk = s["by_kind"]
+    return (
+        "🛠 <b>Admin panel — umumiy</b>\n\n"
+        f"📊 Jami tekshiruvlar: <b>{s['total']}</b>\n"
+        f"📅 Oxirgi 24 soatda: <b>{s['today']}</b>\n"
+        f"👥 Foydalanuvchilar: <b>{s['users']}</b>\n\n"
+        f"{config.RED} Xavfli: {s['red']}\n"
+        f"{config.YELLOW} Shubhali: {s['yellow']}\n"
+        f"{config.GREEN} Xavfsiz: {s['green']}\n\n"
+        f"📝 Matn: {bk.get('text', 0)} · 🔗 Havola: {bk.get('link', 0)} · "
+        f"📎 APK: {bk.get('apk', 0)}\n"
+        f"📡 Topilgan tokenlar: {s['tokens']}"
+    )
+
+
 @dp.message(Command("admin"))
 async def admin_panel(m: Message):
-    """Faqat adminlar uchun — umumiy statistika."""
+    """Faqat adminlar uchun — statistika paneli."""
     if m.from_user.id not in config.ADMIN_IDS:
         await m.answer("❌ Bu bo'lim faqat adminlar uchun.")
         return
     try:
-        s = await db.stats()
+        await m.answer(await admin_stats_text(), parse_mode="HTML",
+                       reply_markup=admin_kb())
     except Exception as e:
         await m.answer(f"⚠️ Bazadan o'qishda xato: {e}")
+
+
+KIND_EMOJI = {"text": "📝", "link": "🔗", "apk": "📎", "archive": "🔐"}
+
+
+@dp.callback_query(F.data.startswith("adm_"))
+async def admin_cb(c: CallbackQuery):
+    if c.from_user.id not in config.ADMIN_IDS:
+        await c.answer("Faqat adminlar uchun", show_alert=True)
         return
-    await m.answer(
-        "🛠 <b>Admin panel</b>\n\n"
-        f"📊 Jami tekshiruvlar: <b>{s['total']}</b>\n"
-        f"👥 Foydalanuvchilar: <b>{s['users']}</b>\n\n"
-        f"{config.RED} Xavfli: {s['red']}\n"
-        f"{config.YELLOW} Shubhali: {s['yellow']}\n"
-        f"{config.GREEN} Xavfsiz: {s['green']}",
-        parse_mode="HTML",
-    )
+    what = c.data
+    try:
+        if what == "adm_stats":
+            text = await admin_stats_text()
+        elif what == "adm_recent":
+            rows = await db.recent(10)
+            text = "🕐 <b>Oxirgi 10 tekshiruv</b>\n\n" + ("\n".join(
+                f"{EMOJI.get(r[1], '')}{KIND_EMOJI.get(r[0], '')} "
+                f"{r[2]}/100 — {(r[3] or '')[:40]}" for r in rows) or "Hali yo'q")
+        elif what == "adm_threats":
+            rows = await db.top_threats(8)
+            text = "🔴 <b>Eng ko'p uchragan xavflar</b>\n\n" + ("\n".join(
+                f"• {(r[0] or 'nomalum')[:45]} — <b>{r[1]}x</b>" for r in rows)
+                or "Hali xavfli fayl yo'q")
+        elif what == "adm_tokens":
+            rows = await db.list_tokens(12)
+            text = "📡 <b>Topilgan firibgar tokenlari</b>\n\n" + ("\n".join(
+                f"• <code>{r[0]}</code> ({(r[1] or '?')[:25]})" for r in rows)
+                or "Hali token topilmagan")
+        else:
+            text = "?"
+        await c.message.edit_text(text, parse_mode="HTML", reply_markup=admin_kb())
+    except Exception as e:
+        await c.answer(f"Xato: {e}", show_alert=True)
+    await c.answer()
+
+
+@dp.callback_query(F.data == "apk_perms")
+async def apk_perms_cb(c: CallbackQuery):
+    info = LAST_APK.get(c.from_user.id)
+    if not info:
+        await c.answer("Ma'lumot eskirgan. APK'ni qayta yuboring.", show_alert=True)
+        return
+    perms = info.get("permissions", [])
+    text = (f"📋 <b>{info['name']} — barcha ruxsatlar ({len(perms)})</b>\n\n"
+            + "\n".join(f"• <code>{p.split('.')[-1]}</code>" for p in perms))
+    await c.message.answer(text[:4000], parse_mode="HTML")
+    await c.answer()
+
+
+@dp.callback_query(F.data == "again")
+async def again_cb(c: CallbackQuery):
+    await c.message.answer("🔍 Tekshirish uchun shubhali xabar, havola yoki "
+                           "fayl (.apk / .zip) yuboring.")
+    await c.answer()
 
 
 @dp.message(F.text.regexp(r"https?://"))
@@ -160,8 +267,9 @@ async def on_file(m: Message):
                     await db.save_token(t, info["package"])
                 except Exception:
                     pass
+            LAST_APK[m.from_user.id] = info
             await m.answer(format_apk(verdict, score, info),
-                           parse_mode="HTML", reply_markup=again_kb())
+                           parse_mode="HTML", reply_markup=apk_kb())
         except Exception as e:
             logging.exception("APK tahlil xatosi")
             await m.answer(f"⚠️ Bu faylni tahlil qila olmadim.\n"
