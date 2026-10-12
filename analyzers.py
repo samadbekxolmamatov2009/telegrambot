@@ -64,6 +64,39 @@ DANGEROUS_PERMS = {
 TG_TOKEN_RE = re.compile(r"\d{8,10}:[A-Za-z0-9_-]{35}")
 URL_RE = re.compile(r"https?://[^\s\"'<>)]+")
 IP_RE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
+EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+
+
+def _cert_info(a):
+    """APK imzosi (kim yasagan/imzolagan) — forensik ma'lumot."""
+    import hashlib
+    try:
+        certs = a.get_certificates()
+        if not certs:
+            return None
+        c = certs[0]
+        def field(dn, key):
+            try:
+                return dn.native.get(key)
+            except Exception:
+                return None
+        subj = c.subject
+        info = {
+            "common_name": field(subj, "common_name"),
+            "org": field(subj, "organization_name"),
+            "email": field(subj, "email_address"),
+            "country": field(subj, "country_name"),
+            "not_before": str(c["tbs_certificate"]["validity"]["not_before"].native)[:10],
+            "not_after": str(c["tbs_certificate"]["validity"]["not_after"].native)[:10],
+            "sha256": hashlib.sha256(c.dump()).hexdigest(),
+        }
+        # Soxta imzo: o'zini Google/Android deb ko'rsatgan
+        blob = " ".join(str(v) for v in info.values() if v).lower()
+        info["impersonation"] = any(
+            w in blob for w in ("android.com", "google", "com.android"))
+        return info
+    except Exception:
+        return None
 
 
 def _redact(token: str) -> str:
@@ -124,6 +157,8 @@ def check_apk(path: str) -> tuple:
     with open(path, "rb") as f:
         info["sha256"] = hashlib.sha256(f.read()).hexdigest()
     info["size_kb"] = round(os.path.getsize(path) / 1024)
+    info["signer"] = _cert_info(a)
+    info["emails"] = []
 
     # Xavfli ruxsatlar
     for p in perms:
@@ -160,6 +195,10 @@ def check_apk(path: str) -> tuple:
                         info["tokens"].append(r)
                 if "api.telegram.org" in val:
                     found_signs.add("Ma'lumotni Telegram bot orqali yuboradi")
+                for em in EMAIL_RE.findall(val):
+                    if em not in info["emails"] and len(info["emails"]) < 6 \
+                            and "@android.com" not in em and "@example" not in em:
+                        info["emails"].append(em)
                 for u in URL_RE.findall(val):
                     host = u[:60]
                     if host not in seen_url and "schemas.android" not in u \
@@ -224,6 +263,11 @@ def check_apk(path: str) -> tuple:
         found_signs.add("Paket nomida 'hidden' (yashirin) so'zi bor")
         packer.append("sus_pkg")
 
+    # Soxta imzo (o'zini Google/Android deb ko'rsatgan)
+    if info.get("signer") and info["signer"].get("impersonation"):
+        found_signs.add("Soxta imzo: o'zini Google/Android deb ko'rsatgan")
+        packer.append("fake_cert")
+
     info["behaviors"] = sorted(found_signs)
     info["_packer"] = packer
 
@@ -265,10 +309,12 @@ def check_apk(path: str) -> tuple:
         score += 20
     if "sus_pkg" in pk:
         score += 15
+    if "fake_cert" in pk:
+        score += 25
     # Ikki yoki undan ortiq KUCHLI belgi birga bo'lsa — aniq xavfli
     # (native o'zi oddiy ilovalarda ham bo'ladi, shuning uchun kuchli emas)
     STRONG = ("crypto_pack", "hidden_payload", "enc_zip", "hide_icon",
-              "disguise", "sus_pkg")
+              "disguise", "sus_pkg", "fake_cert")
     if len([x for x in pk if x in STRONG]) >= 2:
         score = max(score, 75)
 

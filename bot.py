@@ -8,7 +8,8 @@ import tempfile
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import CommandStart, Command
 from aiogram.types import (
-    Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton,
+    Message, CallbackQuery, ChatMemberUpdated,
+    InlineKeyboardMarkup, InlineKeyboardButton,
 )
 
 import config
@@ -131,6 +132,8 @@ WHY_SUSPICIOUS = {
         "O'zini oddiy ilova qilib ko'rsatgan (aldov)",
     "Paket nomida 'hidden' (yashirin) so'zi bor":
         "Dasturchi uni ataylab 'yashirin' qilib yaratgan",
+    "Soxta imzo: o'zini Google/Android deb ko'rsatgan":
+        "Soxta imzo bilan o'zini Google/Android rasmiy dasturi qilib ko'rsatgan",
 }
 
 
@@ -224,6 +227,24 @@ async def remember(m, is_check=False):
         pass
 
 
+def is_group(m):
+    return m.chat.type in ("group", "supergroup")
+
+
+async def group_followup(m, verdict):
+    """Guruhда: xavfli fayl bo'lsa, o'chirishga urinadi (bot admin bo'lsa)."""
+    if not is_group(m) or verdict != "red":
+        return
+    try:
+        await m.delete()
+        await m.answer("🗑 <b>Bu xavfli fayl guruhdan o'chirildi.</b> "
+                       "Hech kim ochmasin!", parse_mode="HTML")
+    except Exception:
+        await m.answer("⚠️ <b>Diqqat, xavfli fayl!</b> Men uni o'chira olmadim — "
+                       "meni guruhда admin qiling (xabar o'chirish huquqi bilan), "
+                       "shunda bunday fayllarni o'zim o'chiraman.", parse_mode="HTML")
+
+
 @dp.message(CommandStart())
 async def start(m: Message):
     await remember(m)
@@ -241,6 +262,32 @@ async def start(m: Message):
         "<i>Masalan: \"Kartangiz bloklandi, kodni yuboring\" deb yozib ko'ring.</i>",
         parse_mode="HTML", reply_markup=kb,
     )
+
+
+@dp.my_chat_member()
+async def on_added_to_chat(u: ChatMemberUpdated):
+    """Bot guruhга qo'shilganda qisqa yo'riqnoma yuboradi."""
+    if u.chat.type not in ("group", "supergroup"):
+        return
+    if u.new_chat_member.status not in ("member", "administrator"):
+        return
+    is_admin = u.new_chat_member.status == "administrator"
+    text = (
+        "👋 Salom! Men <b>FiribTekshir</b> — bu guruhда tarqatilgan "
+        "<b>.apk</b> va <b>.zip</b> fayllarni avtomatik tekshiraman.\n\n"
+        "Kimdir shubhali fayl yuborsa, men uni tahlil qilib, xavfli yoki "
+        "yo'qligini hammaga aytaman.\n\n"
+    )
+    if is_admin:
+        text += ("✅ Men admin qilindim — xavfli fayllarni o'zim "
+                 "<b>o'chiraman</b>.")
+    else:
+        text += ("ℹ️ Agar meni <b>admin</b> qilsangiz (xabar o'chirish huquqi "
+                 "bilan), xavfli fayllarni o'zim o'chira olaman.")
+    try:
+        await bot.send_message(u.chat.id, text, parse_mode="HTML")
+    except Exception:
+        pass
 
 
 @dp.message(Command("id"))
@@ -364,19 +411,50 @@ async def apk_tech_cb(c: CallbackQuery):
     if not info:
         await c.answer("Ma'lumot eskirgan. APK'ni qayta yuboring.", show_alert=True)
         return
-    text = (
-        "🔎 <b>Texnik ma'lumot</b> (mutaxassislar uchun)\n\n"
-        f"• Ko'rinadigan nomi: <b>{info['name']}</b>\n"
-        f"• Haqiqiy ichki nomi: <code>{info['package']}</code>\n"
-        "  <i>(ko'rinadigan nom bilan mos kelmasligi — niqoblash belgisi)</i>\n"
-        f"• Versiya: {info['version']}\n"
-        f"• Hajmi: {info.get('size_kb', '?')} KB\n"
-        f"• Ruxsatlar soni: {len(info.get('permissions', []))}\n\n"
-        f"🔑 <b>Fayl barmoq izi (SHA-256):</b>\n<code>{info['sha256']}</code>\n"
-        "<i>Bu — faylning noyob raqami. Uni VirusTotal kabi saytlarga "
-        "qidirib, bu fayl ilgari virus deb topilganini tekshirsa bo'ladi.</i>"
-    )
-    await c.message.answer(text, parse_mode="HTML")
+    lines = [
+        "🔎 <b>Texnik / forensik ma'lumot</b>",
+        "<i>(davlat organlari va mutaxassislar uchun)</i>\n",
+        f"• Ko'rinadigan nomi: <b>{info['name']}</b>",
+        f"• Haqiqiy ichki nomi: <code>{info['package']}</code>",
+        f"• Versiya: {info['version']} · Hajmi: {info.get('size_kb', '?')} KB",
+        f"• Ruxsatlar soni: {len(info.get('permissions', []))}",
+    ]
+    # Imzo (kim yasagan/imzolagan)
+    s = info.get("signer")
+    if s:
+        lines.append("\n🪪 <b>Imzo (kim yaratgan)</b>")
+        if s.get("common_name"):
+            lines.append(f"• Nomi: {s['common_name']}")
+        if s.get("org"):
+            lines.append(f"• Tashkilot: {s['org']}")
+        if s.get("email"):
+            lines.append(f"• Email: <code>{s['email']}</code>")
+        if s.get("country"):
+            lines.append(f"• Davlat: {s['country']}")
+        lines.append(f"• Amal qilish: {s.get('not_before')} → {s.get('not_after')}")
+        lines.append(f"• Imzo izi: <code>{s.get('sha256','')[:32]}…</code>")
+        if s.get("impersonation"):
+            lines.append("⚠️ <b>Soxta imzo</b> — o'zini Google/Android deb "
+                         "ko'rsatgan (aslida rasmiy emas)")
+    # Topilgan aloqa ma'lumotlari
+    if info.get("emails"):
+        lines.append("\n📧 <b>Kodda topilgan email'lar</b>")
+        for em in info["emails"]:
+            lines.append(f"• <code>{em}</code>")
+    if info.get("tokens"):
+        lines.append("\n📡 <b>Topilgan Telegram tokenlari</b>")
+        for t in info["tokens"]:
+            lines.append(f"• <code>{t}</code>")
+    if info.get("urls"):
+        lines.append("\n🌐 <b>Bog'lanadigan manzillar</b>")
+        for u in info["urls"]:
+            lines.append(f"• <code>{u}</code>")
+    lines.append(f"\n🔑 <b>Fayl barmoq izi (SHA-256)</b>\n<code>{info['sha256']}</code>")
+    lines.append("<i>VirusTotal kabi saytlarда shu raqamni qidirib, fayl "
+                 "ilgari virus deb topilganini tekshirsa bo'ladi.</i>")
+    text = "\n".join(lines)
+    for i in range(0, len(text), 3800):
+        await c.message.answer(text[i:i + 3800], parse_mode="HTML")
     await c.answer()
 
 
@@ -392,6 +470,9 @@ async def on_link(m: Message):
     await remember(m, is_check=True)
     verdict, score, detail = analyzers.check_link(m.text)
     await db.log_check(m.from_user.id, "link", verdict, score, detail)
+    # Guruhда faqat shubhali havolaga javob beramiz (shovqin bo'lmasin)
+    if is_group(m) and verdict == "green":
+        return
     await m.answer(verdict_text("link", verdict, score, detail),
                    parse_mode="HTML", reply_markup=again_kb())
 
@@ -423,6 +504,7 @@ async def on_file(m: Message):
             LAST_APK[m.from_user.id] = info
             await m.answer(format_apk(verdict, score, info),
                            parse_mode="HTML", reply_markup=apk_kb())
+            await group_followup(m, verdict)
         except Exception as e:
             logging.exception("APK tahlil xatosi")
             await m.answer(f"⚠️ Bu faylni tahlil qila olmadim.\n"
@@ -457,6 +539,7 @@ async def on_file(m: Message):
                                + pwnote, parse_mode="HTML")
                 await m.answer(format_apk(res["verdict"], res["score"], info),
                                parse_mode="HTML", reply_markup=apk_kb())
+                await group_followup(m, res["verdict"])
             elif st == "locked":
                 await m.answer(
                     "🔒 <b>Arxiv parol bilan yopilgan.</b>\n\n"
@@ -486,7 +569,7 @@ async def on_file(m: Message):
         await m.answer("Men hozircha .apk va .zip fayllarni tekshiraman.")
 
 
-@dp.message(F.text)
+@dp.message(F.text, F.chat.type == "private")
 async def on_text(m: Message):
     await remember(m, is_check=True)
     verdict, score, detail = analyzers.check_text(m.text)
