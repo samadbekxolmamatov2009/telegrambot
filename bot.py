@@ -55,56 +55,105 @@ VERDICT_SUMMARY = {
 }
 
 
+# Texnik ichki belgi -> foydalanuvchi tilidagi sodda tushuntirish.
+# "nima qila oladi" = ilovaning haqiqiy qobiliyati; "nimasi shubhali" = aldov belgisi.
+# Bir xil ma'noli belgilar bitta sodda qatorga yig'iladi (takror bo'lmasin).
+WHAT_IT_DOES = {
+    "SMS yuboradi": "Sizning nomingizdan SMS yuborishi mumkin (pulingiz yechilishi mumkin)",
+    "Ma'lumotni Telegram bot orqali yuboradi":
+        "Ma'lumotlaringizni Telegram orqali begona odamga yuboradi",
+    "Qo'shimcha yashirin kod yuklaydi (DexClassLoader)":
+        "Internetdan qo'shimcha yashirin dastur yuklab ishga tushiradi",
+    "Accessibility (ekranni boshqarish) ishlatadi":
+        "Ekraningizni o'qiydi va o'zi tugmalarni bosa oladi",
+    "Qurilma administratori huquqini so'raydi":
+        "Telefoningiz ustidan to'liq nazorat so'raydi",
+    "Native kod yuklaydi (.so kutubxona)":
+        "Yashirin qo'shimcha dastur ishga tushiradi",
+}
+# "Nimasi shubhali" — aldov/yashirish belgilari (hammasi bitta ma'noga yig'iladi)
+WHY_SUSPICIOUS = {
+    "Fayllar yashirilgan (anti-analiz: ZIP shifr bayrog'i)":
+        "Ichki fayllarini tekshiruvdan yashirgan — halol ilovalar bunday qilmaydi",
+    "Kodni shifrlab yashiradi (packer: AES/Cipher + yuklash)":
+        "Haqiqiy dasturini ichida shifrlab yashirgan",
+    "Shubhali yashirin fayl (shifrlangan payload bo'lishi mumkin)":
+        "Haqiqiy dasturini ichida shifrlab yashirgan",
+    "Ikonkasini yashirishi mumkin":
+        "O'rnatilgach ekrandan yo'qoladi — topib o'chirish qiyin bo'ladi",
+    "Niqoblangan: oddiy ilova ko'rinadi, lekin kodi yashirilgan":
+        "O'zini oddiy ilova qilib ko'rsatgan (aldov)",
+    "Paket nomida 'hidden' (yashirin) so'zi bor":
+        "Dasturchi uni ataylab 'yashirin' qilib yaratgan",
+}
+
+
+def _plain(info):
+    """behaviors ni ikki guruhga ajratadi: qila oladi / nimasi shubhali."""
+    does, why = [], []
+    for b in info.get("behaviors", []):
+        if b in WHAT_IT_DOES:
+            does.append(WHAT_IT_DOES[b])
+        elif b in WHY_SUSPICIOUS:
+            why.append(WHY_SUSPICIOUS[b])
+        elif b.startswith("Niqoblangan: nomi fayldek"):
+            why.append("O'zini oddiy rasm/fayl qilib ko'rsatgan (aldov)")
+    # ruxsatlardan kelib chiqadigan qobiliyatlar
+    for _p, desc in info.get("dangerous", []):
+        does.append(desc)
+    # takrorlarni olib tashlash, tartibni saqlash
+    def uniq(xs):
+        seen, out = set(), []
+        for x in xs:
+            if x not in seen:
+                seen.add(x); out.append(x)
+        return out
+    return uniq(does), uniq(why)
+
+
 def format_apk(verdict, score, info):
     full = score // 10
     bars = "🟥" * full + "⬜" * (10 - full)
+    does, why = _plain(info)
+
     lines = [
-        f"{EMOJI[verdict]} <b>{LABEL[verdict]}</b>",
-        f"Xavf darajasi: <b>{score}/100</b>",
+        f"{EMOJI[verdict]} <b>{LABEL[verdict]}</b> — {score}/100",
         bars,
         "",
         f"<i>{VERDICT_SUMMARY[verdict]}</i>",
         "",
-        "📦 <b>Ilova haqida</b>",
-        f"• Nomi: <b>{info['name']}</b>",
-        f"• Paket: <code>{info['package']}</code>",
-        f"• Versiya: {info['version']}",
-        f"• Hajmi: {info.get('size_kb', '?')} KB",
+        f"📱 <b>Ilova nomi:</b> {info['name']}",
     ]
+    # Nomi bilan haqiqiy nomi mos kelmasa — sodda ogohlantirish
+    if any("aldov" in w or "yashirin" in w for w in why):
+        lines.append("<i>⚠️ Ko'rinishi aldamchi — oddiy ilovaga o'xshaydi, "
+                     "lekin aslida unday emas.</i>")
 
-    if info["dangerous"]:
-        lines.append("\n⚠️ <b>Bu ilova nima qila oladi</b>")
-        for _p, desc in info["dangerous"]:
-            lines.append(f"• {desc}")
+    if does:
+        lines.append("\n🚨 <b>Bu ilova sizga nima qila oladi:</b>")
+        for d in does:
+            lines.append(f"• {d}")
 
-    if info["behaviors"]:
-        lines.append("\n🔎 <b>Kodni tekshirganda topildi</b>")
-        for b in info["behaviors"]:
-            lines.append(f"• {b}")
+    if why:
+        lines.append("\n🕵️ <b>Nega biz buni xavfli deb topdik:</b>")
+        for w in why:
+            lines.append(f"• {w}")
 
-    if info["tokens"]:
-        lines.append("\n📡 <b>Yashirin Telegram tokeni topildi</b>")
-        for t in info["tokens"]:
-            lines.append(f"• <code>{t}</code>")
-        lines.append("<i>O'g'irlangan ma'lumot shu bot orqali begonaga yuborilishi mumkin.</i>")
+    if info.get("tokens"):
+        lines.append("\n📡 <b>Diqqat:</b> bu ilova ma'lumotni begona "
+                     "Telegram botiga yuboradi.")
 
-    if info["urls"]:
-        lines.append("\n🌐 <b>Bog'lanadigan manzillar</b>")
-        for u in info["urls"][:5]:
-            lines.append(f"• <code>{u}</code>")
+    if not does and not why and verdict == "green":
+        lines.append("\n✅ Ochiq xavfli belgi topilmadi.")
 
-    nperm = len(info.get("permissions", []))
-    lines.append(f"\n📋 Jami <b>{nperm} ta</b> ruxsat so'raydi "
-                 f"(to'liq ro'yxat uchun pastdagi tugma)")
-    lines.append(f"🔑 SHA-256:\n<code>{info['sha256']}</code>")
     lines.append("\n" + _advice(verdict))
     return "\n".join(lines)
 
 
 def apk_kb():
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📋 To'liq ruxsatlar ro'yxati",
-                              callback_data="apk_perms")],
+        [InlineKeyboardButton(text="📋 To'liq ruxsatlar", callback_data="apk_perms"),
+         InlineKeyboardButton(text="🔎 Texnik ma'lumot", callback_data="apk_tech")],
         [InlineKeyboardButton(text="🔍 Yana tekshir", callback_data="again"),
          InlineKeyboardButton(text="📤 Do'stga ulash", switch_inline_query="")],
     ])
@@ -226,6 +275,28 @@ async def apk_perms_cb(c: CallbackQuery):
     text = (f"📋 <b>{info['name']} — barcha ruxsatlar ({len(perms)})</b>\n\n"
             + "\n".join(f"• <code>{p.split('.')[-1]}</code>" for p in perms))
     await c.message.answer(text[:4000], parse_mode="HTML")
+    await c.answer()
+
+
+@dp.callback_query(F.data == "apk_tech")
+async def apk_tech_cb(c: CallbackQuery):
+    info = LAST_APK.get(c.from_user.id)
+    if not info:
+        await c.answer("Ma'lumot eskirgan. APK'ni qayta yuboring.", show_alert=True)
+        return
+    text = (
+        "🔎 <b>Texnik ma'lumot</b> (mutaxassislar uchun)\n\n"
+        f"• Ko'rinadigan nomi: <b>{info['name']}</b>\n"
+        f"• Haqiqiy ichki nomi: <code>{info['package']}</code>\n"
+        "  <i>(ko'rinadigan nom bilan mos kelmasligi — niqoblash belgisi)</i>\n"
+        f"• Versiya: {info['version']}\n"
+        f"• Hajmi: {info.get('size_kb', '?')} KB\n"
+        f"• Ruxsatlar soni: {len(info.get('permissions', []))}\n\n"
+        f"🔑 <b>Fayl barmoq izi (SHA-256):</b>\n<code>{info['sha256']}</code>\n"
+        "<i>Bu — faylning noyob raqami. Uni VirusTotal kabi saytlarga "
+        "qidirib, bu fayl ilgari virus deb topilganini tekshirsa bo'ladi.</i>"
+    )
+    await c.message.answer(text, parse_mode="HTML")
     await c.answer()
 
 
