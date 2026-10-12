@@ -70,6 +70,13 @@ def _redact(token: str) -> str:
     return token[:6] + "…" + token[-4:] if len(token) > 12 else token
 
 
+def _zinfo_size(z, name: str) -> int:
+    try:
+        return z.getinfo(name).file_size
+    except Exception:
+        return 0
+
+
 # androguard juda ko'p DEBUG log chiqaradi (loguru orqali) — o'chiramiz,
 # aks holda loglar toshadi va sekinlashadi.
 try:
@@ -82,10 +89,15 @@ except Exception:
 CODE_SIGNS = {
     "Landroid/telephony/SmsManager;": None,       # SMS bilan ishlash
     "sendTextMessage": "SMS yuboradi",
-    "Ldalvik/system/DexClassLoader;": "Yashirin kodni keyin yuklaydi (dropper belgisi)",
+    "Ldalvik/system/DexClassLoader;": "Qo'shimcha yashirin kod yuklaydi (DexClassLoader)",
+    "Ldalvik/system/InMemoryDexClassLoader;": "Qo'shimcha yashirin kod yuklaydi (DexClassLoader)",
     "Landroid/app/admin/DevicePolicyManager;": "Qurilma administratori huquqini so'raydi",
     "android/accessibilityservice": "Accessibility (ekranni boshqarish) ishlatadi",
 }
+
+# Packer/dropper kripto va yuklash imzolari (DEX satrlarida)
+CRYPTO_SIGNS = ["Ljavax/crypto/Cipher;", "AES/", "javax.crypto", "Ljavax/crypto/spec/SecretKeySpec;"]
+LOADLIB_SIGNS = ["loadLibrary", "System/loadLibrary", "Ljava/lang/System;->loadLibrary"]
 
 
 def check_apk(path: str) -> tuple:
@@ -120,7 +132,8 @@ def check_apk(path: str) -> tuple:
     # DEX satrlarini o'qish (kod grafini qurmasdan — yengil va tez)
     seen_url = set()
     found_signs = set()
-    sms_class = False
+    has_crypto = False
+    has_loadlib = False
     try:
         for dex_bytes in a.get_all_dex():
             try:
@@ -132,21 +145,19 @@ def check_apk(path: str) -> tuple:
                 val = s.decode("utf-8", "ignore") if isinstance(s, bytes) else str(s)
                 if not val:
                     continue
-                # Xavfli imzolar
                 for sign, desc in CODE_SIGNS.items():
-                    if sign in val:
-                        if sign == "Landroid/telephony/SmsManager;":
-                            sms_class = True
-                        elif desc:
-                            found_signs.add(desc)
-                # Telegram tokenlari
+                    if sign in val and desc:
+                        found_signs.add(desc)
+                if any(c in val for c in CRYPTO_SIGNS):
+                    has_crypto = True
+                if any(l in val for l in LOADLIB_SIGNS):
+                    has_loadlib = True
                 for tok in TG_TOKEN_RE.findall(val):
                     r = _redact(tok)
                     if r not in info["tokens"]:
                         info["tokens"].append(r)
                 if "api.telegram.org" in val:
                     found_signs.add("Ma'lumotni Telegram bot orqali yuboradi")
-                # Manzillar
                 for u in URL_RE.findall(val):
                     host = u[:60]
                     if host not in seen_url and "schemas.android" not in u \
@@ -158,9 +169,51 @@ def check_apk(path: str) -> tuple:
     except Exception:
         pass
 
-    if sms_class and "SMS yuboradi" in found_signs:
-        pass  # allaqachon qo'shiladi
+    # ── Packer/dropper tahlili (ZIP darajasida) ──────────────────
+    packer = []   # xavf bali uchun kalitlar
+    try:
+        import zipfile
+        z = zipfile.ZipFile(path)
+        names = z.namelist()
+        # 1. Fayllar "shifrlangan" bayrog'i bilan belgilangan (anti-analiz)
+        enc = [i.filename for i in z.infolist() if (i.flag_bits & 0x1)]
+        if enc:
+            found_signs.add("Fayllar yashirilgan (anti-analiz: ZIP shifr bayrog'i)")
+            packer.append("enc_zip")
+        # 2. Native kod (.so)
+        if any(n.startswith("lib/") and n.endswith(".so") for n in names):
+            found_signs.add("Native kod yuklaydi (.so kutubxona)")
+            packer.append("native")
+        # 3. assets ichida soxta nomli yirik fayl (media kengaytma, lekin katta)
+        fake = [n for n in names if n.startswith("assets/") and
+                n.lower().endswith((".wma", ".mp3", ".mp4", ".dat", ".png", ".jpg", ".bin"))
+                and _zinfo_size(z, n) > 50_000]
+        if fake:
+            found_signs.add("Shubhali yashirin fayl (shifrlangan payload bo'lishi mumkin)")
+            packer.append("hidden_payload")
+        # 4. Ikonka yashirish belgisi
+        if any("hidden" in n.lower() and "logo" in n.lower() for n in names) or \
+           any("hidden_app" in n.lower() for n in names):
+            found_signs.add("Ikonkasini yashirishi mumkin")
+            packer.append("hide_icon")
+    except Exception:
+        pass
+
+    # Kripto + yuklash birgalikda = packer
+    if has_crypto and (has_loadlib or "native" in packer):
+        found_signs.add("Kodni shifrlab yashiradi (packer: AES/Cipher + yuklash)")
+        packer.append("crypto_pack")
+
+    # 5. Niqoblash: nomi "rasm/video/foto", paketi mutlaqo boshqa
+    disguise_words = ("rasm", "photo", "video", "galereya", "gallery", "foto",
+                      "player", "music", "pdf", "hujjat", "surat")
+    nm = (info["name"] or "").lower()
+    if any(w in nm for w in disguise_words) and packer:
+        found_signs.add("Niqoblangan: oddiy ilova ko'rinadi, lekin kodi yashirilgan")
+        packer.append("disguise")
+
     info["behaviors"] = sorted(found_signs)
+    info["_packer"] = packer
 
     # Xavf bali
     score = 10
@@ -179,11 +232,32 @@ def check_apk(path: str) -> tuple:
         score += 25
     if info["tokens"]:
         score += 20
-    if any("dropper" in b for b in info["behaviors"]):
-        score += 15
+    if any("DexClassLoader" in b for b in info["behaviors"]):
+        score += 20
     if any("administratori" in b for b in info["behaviors"]):
         score += 15
+
+    # Packer/dropper indikatorlari
+    pk = info.get("_packer", [])
+    if "crypto_pack" in pk:
+        score += 30
+    if "hidden_payload" in pk:
+        score += 20
+    if "enc_zip" in pk:
+        score += 20
+    if "native" in pk:
+        score += 10
+    if "hide_icon" in pk:
+        score += 15
+    if "disguise" in pk:
+        score += 20
+    # Bir nechta packer belgisi birga bo'lsa — aniq xavfli
+    if len([x for x in pk if x in ("crypto_pack", "hidden_payload", "enc_zip",
+                                   "native", "hide_icon", "disguise")]) >= 3:
+        score = max(score, 75)
+
     score = min(score, 100)
+    info.pop("_packer", None)
 
     verdict = "red" if score >= 70 else "yellow" if score >= 35 else "green"
     return verdict, score, info
