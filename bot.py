@@ -200,19 +200,31 @@ def format_apk(verdict, score, info):
     return "\n".join(lines)
 
 
-def apk_kb():
+def _share_url(info, verdict, score):
+    """Do'stga ulash: natija + bot havolasini birga yuboradi."""
+    import urllib.parse
+    name = info.get("name", "ilova")
+    txt = (f"⚠️ «Apk aniqlovchi» natijasi:\n"
+           f"«{name}» — {EMOJI[verdict]} {LABEL[verdict]} ({score}/100)\n\n"
+           f"Shubhali ilovalarни o'zing ham tekshir 👇")
+    bot_link = f"https://t.me/{BOT_USERNAME}" if BOT_USERNAME else "https://t.me"
+    return ("https://t.me/share/url?url=" + urllib.parse.quote(bot_link)
+            + "&text=" + urllib.parse.quote(txt))
+
+
+def apk_kb(info=None, verdict="red", score=0):
+    share = _share_url(info or {}, verdict, score)
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📋 To'liq ruxsatlar", callback_data="apk_perms"),
          InlineKeyboardButton(text="🔎 Texnik ma'lumot", callback_data="apk_tech")],
-        [InlineKeyboardButton(text="🔍 Yana tekshir", callback_data="again"),
-         InlineKeyboardButton(text="📤 Do'stga ulash", switch_inline_query="")],
+        [InlineKeyboardButton(text="📤 Do'stga ulash (natija bilan)", url=share)],
+        [InlineKeyboardButton(text="🔍 Yana tekshir", callback_data="again")],
     ])
 
 
 def again_kb():
     return InlineKeyboardMarkup(inline_keyboard=[[
         InlineKeyboardButton(text="🔍 Yana tekshir", callback_data="again"),
-        InlineKeyboardButton(text="📤 Do'stga ulash", switch_inline_query=""),
     ]])
 
 
@@ -417,7 +429,7 @@ async def adm_users(m: Message):
     rows = await db.users_list(20)
     total = await db.users_count()
     body = "\n".join(
-        f"• {(r[1] or 'Ismsiz')[:28]} — <code>{r[0]}</code> ({r[2]} tekshiruv)"
+        f"• {(r[1] or 'Ismsiz')[:50]} — <code>{r[0]}</code> ({r[2]} tekshiruv)"
         for r in rows) or "Hali yo'q"
     await m.answer(f"👥 <b>Foydalanuvchilar: {total} ta</b>\n\n"
                    f"Oxirgi faol 20 tasi:\n{body}", parse_mode="HTML")
@@ -602,7 +614,8 @@ async def on_file(m: Message):
                     pass
             LAST_APK[m.from_user.id] = info
             await m.answer(format_apk(verdict, score, info),
-                           parse_mode="HTML", reply_markup=apk_kb())
+                           parse_mode="HTML",
+                           reply_markup=apk_kb(info, verdict, score))
             await group_followup(m, verdict)
         except Exception as e:
             logging.exception("APK tahlil xatosi")
@@ -637,7 +650,8 @@ async def on_file(m: Message):
                 await m.answer("📦 Arxiv ichida ilova (.apk) topildi va tekshirildi:"
                                + pwnote, parse_mode="HTML")
                 await m.answer(format_apk(res["verdict"], res["score"], info),
-                               parse_mode="HTML", reply_markup=apk_kb())
+                               parse_mode="HTML",
+                               reply_markup=apk_kb(info, res["verdict"], res["score"]))
                 await group_followup(m, res["verdict"])
             elif st == "locked":
                 await m.answer(
