@@ -149,3 +149,12 @@ async def users_list(limit=15):
 async def users_count():
     r = await _c().execute("SELECT COUNT(*) FROM users")
     return r.rows[0][0]
+
+
+async def user_checks(user_id, limit=15):
+    """Foydalanuvchining o'zi tekshirgan APK/arxivlar tarixi."""
+    r = await _c().execute(
+        "SELECT verdict, score, detail, created FROM checks "
+        "WHERE user_id=? AND kind IN ('apk','archive') "
+        "ORDER BY id DESC LIMIT ?", [user_id, limit])
+    return r.rows

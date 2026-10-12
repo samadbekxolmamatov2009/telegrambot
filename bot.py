@@ -1,4 +1,4 @@
-"""FiribTekshir — Telegram firibgarlik ovchisi. Asosiy bot."""
+"""Apk aniqlovchi — Telegram firibgarlik ovchisi. Asosiy bot."""
 import asyncio
 import logging
 import os
@@ -252,19 +252,22 @@ async def start(m: Message):
     if is_group(m):
         return
     await remember(m)
-    rows = [[InlineKeyboardButton(
-        text="➕ Meni guruhga qo'shish",
-        url=f"https://t.me/{BOT_USERNAME}?startgroup=true" if BOT_USERNAME else "https://t.me")]]
+    grp_url = f"https://t.me/{BOT_USERNAME}?startgroup=true" if BOT_USERNAME else "https://t.me"
+    rows = [
+        [InlineKeyboardButton(text="🗂 Tekshirilgan APKlar",
+                              callback_data="my_apks")],
+        [InlineKeyboardButton(text="➕ Guruhga qo'shish", url=grp_url)],
+    ]
     if m.from_user.id in config.ADMIN_IDS:
         rows.append([InlineKeyboardButton(text="🛠 Admin panel",
                                           callback_data="adm_open")])
     await m.answer(
-        "👋 Salom! Men <b>FiribTekshir</b> botman.\n\n"
+        "👋 Salom! Men <b>Apk aniqlovchi</b> botman.\n\n"
         "Menga shubhali <b>ilova faylini</b> (.apk) yoki <b>arxivni</b> "
         "(.zip) yuboring — men uni ochib, ichini tekshirib, xavfli yoki "
         "xavfsizligini o'zbek tilida tushuntiraman.\n\n"
         "Meni <b>guruhingizга</b> ham qo'shsangiz, u yerda tarqatilgan "
-        "xavfli ilovalarni o'zim ushlab, ogohlantiraman 👇",
+        "xavfli ilovalarni o'zim ushlab, ogohlantiraman.",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
     )
@@ -279,7 +282,7 @@ async def on_added_to_chat(u: ChatMemberUpdated):
         return
     is_admin = u.new_chat_member.status == "administrator"
     text = (
-        "👋 Salom! Men <b>FiribTekshir</b> — bu guruhда tarqatilgan "
+        "👋 Salom! Men <b>Apk aniqlovchi</b> — bu guruhда tarqatilgan "
         "<b>.apk</b> va <b>.zip</b> fayllarni avtomatik tekshiraman.\n\n"
         "Kimdir shubhali fayl yuborsa, men uni tahlil qilib, xavfli yoki "
         "yo'qligini hammaga aytaman.\n\n"
@@ -544,10 +547,28 @@ async def apk_tech_cb(c: CallbackQuery):
     await c.answer()
 
 
+@dp.callback_query(F.data == "my_apks")
+async def my_apks_cb(c: CallbackQuery):
+    import datetime
+    rows = await db.user_checks(c.from_user.id, 15)
+    if not rows:
+        await c.message.answer("🗂 Siz hali birorta APK tekshirmagansiz.\n"
+                               "Menga .apk yoki .zip fayl yuboring.")
+        await c.answer()
+        return
+    lines = ["🗂 <b>Siz tekshirgan oxirgi APKlar</b>\n"]
+    for verdict, score, detail, created in rows:
+        dt = datetime.datetime.fromtimestamp(created).strftime("%d.%m %H:%M")
+        lines.append(f"{EMOJI.get(verdict, '')} <b>{score}/100</b> · "
+                     f"{(detail or '')[:35]} <i>({dt})</i>")
+    await c.message.answer("\n".join(lines), parse_mode="HTML")
+    await c.answer()
+
+
 @dp.callback_query(F.data == "again")
 async def again_cb(c: CallbackQuery):
-    await c.message.answer("🔍 Tekshirish uchun shubhali xabar, havola yoki "
-                           "fayl (.apk / .zip) yuboring.")
+    await c.message.answer("🔍 Tekshirish uchun shubhali fayl (.apk / .zip) "
+                           "yuboring.")
     await c.answer()
 
 
