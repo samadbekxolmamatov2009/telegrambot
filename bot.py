@@ -10,6 +10,7 @@ from aiogram.filters import CommandStart, Command
 from aiogram.types import (
     Message, CallbackQuery, ChatMemberUpdated,
     InlineKeyboardMarkup, InlineKeyboardButton,
+    ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove,
 )
 
 import config
@@ -248,19 +249,23 @@ async def group_followup(m, verdict):
 @dp.message(CommandStart())
 async def start(m: Message):
     await remember(m)
-    kb = None
+    rows = [[InlineKeyboardButton(
+        text="➕ Meni guruhga qo'shish",
+        url=f"https://t.me/{BOT_USERNAME}?startgroup=true" if BOT_USERNAME else "https://t.me")]]
     if m.from_user.id in config.ADMIN_IDS:
-        kb = InlineKeyboardMarkup(inline_keyboard=[[
-            InlineKeyboardButton(text="🛠 Admin panel", callback_data="adm_open")]])
+        rows.append([InlineKeyboardButton(text="🛠 Admin panel",
+                                          callback_data="adm_open")])
     await m.answer(
         "👋 Salom! Men <b>FiribTekshir</b> botman.\n\n"
         "Menga quyidagilardan birini yuboring:\n"
         "• 📝 Shubhali <b>xabar</b> matnini\n"
         "• 🔗 Shubhali <b>havola</b>ni\n"
         "• 📎 Shubhali <b>fayl</b> (.apk yoki .zip)\n\n"
-        "Men xavfli yoki xavfsizligini o'zbek tilida tushuntiraman.\n\n"
+        "Men xavfli yoki xavfsizligini o'zbek tilida tushuntiraman.\n"
+        "Meni guruhingizга ham qo'shishingiz mumkin 👇\n\n"
         "<i>Masalan: \"Kartangiz bloklandi, kodni yuboring\" deb yozib ko'ring.</i>",
-        parse_mode="HTML", reply_markup=kb,
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
     )
 
 
@@ -301,14 +306,37 @@ async def my_id(m: Message):
     )
 
 
-def admin_kb():
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📊 Umumiy", callback_data="adm_stats"),
-         InlineKeyboardButton(text="🕐 Oxirgilari", callback_data="adm_recent")],
-        [InlineKeyboardButton(text="👥 Foydalanuvchilar", callback_data="adm_users"),
-         InlineKeyboardButton(text="🔴 Top xavflar", callback_data="adm_threats")],
-        [InlineKeyboardButton(text="📡 Tokenlar", callback_data="adm_tokens")],
-    ])
+BOT_USERNAME = ""  # main()da to'ldiriladi
+
+
+def group_add_kb():
+    """'Guruhga qo'shish' inline tugmasi (startgroup)."""
+    url = f"https://t.me/{BOT_USERNAME}?startgroup=true" if BOT_USERNAME else "https://t.me"
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="➕ Meni guruhga qo'shish", url=url)]])
+
+
+# Admin panel — rasmdagidek katta, doimiy tugmalar (reply keyboard)
+BTN_STATS = "📊 Statistika"
+BTN_USERS = "👥 Foydalanuvchilar"
+BTN_RECENT = "🕐 Oxirgi tekshiruvlar"
+BTN_THREATS = "🔴 Top xavflar"
+BTN_TOKENS = "📡 Topilgan tokenlar"
+BTN_GROUP = "➕ Guruhga qo'shish"
+BTN_CLOSE = "❌ Panelni yopish"
+
+
+def admin_menu_kb():
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text=BTN_STATS)],
+            [KeyboardButton(text=BTN_USERS), KeyboardButton(text=BTN_RECENT)],
+            [KeyboardButton(text=BTN_THREATS), KeyboardButton(text=BTN_TOKENS)],
+            [KeyboardButton(text=BTN_GROUP), KeyboardButton(text=BTN_CLOSE)],
+        ],
+        resize_keyboard=True,
+        input_field_placeholder="Admin panel — tugmani tanlang",
+    )
 
 
 async def admin_stats_text():
@@ -328,60 +356,109 @@ async def admin_stats_text():
     )
 
 
-@dp.message(Command("admin"))
-async def admin_panel(m: Message):
-    """Faqat adminlar uchun — statistika paneli."""
-    if m.from_user.id not in config.ADMIN_IDS:
-        await m.answer("❌ Bu bo'lim faqat adminlar uchun.")
-        return
-    try:
-        await m.answer(await admin_stats_text(), parse_mode="HTML",
-                       reply_markup=admin_kb())
-    except Exception as e:
-        await m.answer(f"⚠️ Bazadan o'qishda xato: {e}")
-
-
 KIND_EMOJI = {"text": "📝", "link": "🔗", "apk": "📎", "archive": "🔐"}
 
 
-@dp.callback_query(F.data.startswith("adm_"))
-async def admin_cb(c: CallbackQuery):
+async def open_admin_panel(m):
+    """Admin panelni ochadi — katta tugmali menyu + umumiy statistika."""
+    try:
+        await m.answer(await admin_stats_text(), parse_mode="HTML",
+                       reply_markup=admin_menu_kb())
+    except Exception as e:
+        await m.answer(f"⚠️ Bazadan o'qishda xato: {e}",
+                       reply_markup=admin_menu_kb())
+
+
+@dp.message(Command("admin"))
+async def admin_panel(m: Message):
+    if m.from_user.id not in config.ADMIN_IDS:
+        await m.answer("❌ Bu bo'lim faqat adminlar uchun.")
+        return
+    await open_admin_panel(m)
+
+
+@dp.callback_query(F.data == "adm_open")
+async def adm_open_cb(c: CallbackQuery):
     if c.from_user.id not in config.ADMIN_IDS:
         await c.answer("Faqat adminlar uchun", show_alert=True)
         return
-    what = c.data
-    try:
-        if what in ("adm_stats", "adm_open"):
-            text = await admin_stats_text()
-        elif what == "adm_users":
-            rows = await db.users_list(15)
-            total = await db.users_count()
-            head = f"👥 <b>Foydalanuvchilar: {total} ta</b>\n\n"
-            body = "\n".join(
-                f"• {(r[1] or 'Ismsiz')[:28]} — <code>{r[0]}</code> "
-                f"({r[2]} tekshiruv)" for r in rows) or "Hali yo'q"
-            text = head + "Oxirgi faol 15 tasi:\n" + body
-        elif what == "adm_recent":
-            rows = await db.recent(10)
-            text = "🕐 <b>Oxirgi 10 tekshiruv</b>\n\n" + ("\n".join(
-                f"{EMOJI.get(r[1], '')}{KIND_EMOJI.get(r[0], '')} "
-                f"{r[2]}/100 — {(r[3] or '')[:40]}" for r in rows) or "Hali yo'q")
-        elif what == "adm_threats":
-            rows = await db.top_threats(8)
-            text = "🔴 <b>Eng ko'p uchragan xavflar</b>\n\n" + ("\n".join(
-                f"• {(r[0] or 'nomalum')[:45]} — <b>{r[1]}x</b>" for r in rows)
-                or "Hali xavfli fayl yo'q")
-        elif what == "adm_tokens":
-            rows = await db.list_tokens(12)
-            text = "📡 <b>Topilgan firibgar tokenlari</b>\n\n" + ("\n".join(
-                f"• <code>{r[0]}</code> ({(r[1] or '?')[:25]})" for r in rows)
-                or "Hali token topilmagan")
-        else:
-            text = "?"
-        await c.message.edit_text(text, parse_mode="HTML", reply_markup=admin_kb())
-    except Exception as e:
-        await c.answer(f"Xato: {e}", show_alert=True)
+    await open_admin_panel(c.message)
     await c.answer()
+
+
+# ── Admin tugmalari (reply keyboard matnlari) ────────────────────
+def _admin_only(m):
+    return m.from_user.id in config.ADMIN_IDS
+
+
+@dp.message(F.text == BTN_STATS, F.chat.type == "private")
+async def adm_stats(m: Message):
+    if not _admin_only(m):
+        return
+    await m.answer(await admin_stats_text(), parse_mode="HTML")
+
+
+@dp.message(F.text == BTN_USERS, F.chat.type == "private")
+async def adm_users(m: Message):
+    if not _admin_only(m):
+        return
+    rows = await db.users_list(20)
+    total = await db.users_count()
+    body = "\n".join(
+        f"• {(r[1] or 'Ismsiz')[:28]} — <code>{r[0]}</code> ({r[2]} tekshiruv)"
+        for r in rows) or "Hali yo'q"
+    await m.answer(f"👥 <b>Foydalanuvchilar: {total} ta</b>\n\n"
+                   f"Oxirgi faol 20 tasi:\n{body}", parse_mode="HTML")
+
+
+@dp.message(F.text == BTN_RECENT, F.chat.type == "private")
+async def adm_recent(m: Message):
+    if not _admin_only(m):
+        return
+    rows = await db.recent(12)
+    body = "\n".join(
+        f"{EMOJI.get(r[1], '')}{KIND_EMOJI.get(r[0], '')} {r[2]}/100 — "
+        f"{(r[3] or '')[:40]}" for r in rows) or "Hali yo'q"
+    await m.answer(f"🕐 <b>Oxirgi 12 tekshiruv</b>\n\n{body}", parse_mode="HTML")
+
+
+@dp.message(F.text == BTN_THREATS, F.chat.type == "private")
+async def adm_threats(m: Message):
+    if not _admin_only(m):
+        return
+    rows = await db.top_threats(10)
+    body = "\n".join(f"• {(r[0] or 'nomalum')[:45]} — <b>{r[1]}x</b>"
+                     for r in rows) or "Hali xavfli fayl yo'q"
+    await m.answer(f"🔴 <b>Eng ko'p uchragan xavflar</b>\n\n{body}",
+                   parse_mode="HTML")
+
+
+@dp.message(F.text == BTN_TOKENS, F.chat.type == "private")
+async def adm_tokens(m: Message):
+    if not _admin_only(m):
+        return
+    rows = await db.list_tokens(15)
+    body = "\n".join(f"• <code>{r[0]}</code> ({(r[1] or '?')[:25]})"
+                     for r in rows) or "Hali token topilmagan"
+    await m.answer(f"📡 <b>Topilgan firibgar tokenlari</b>\n\n{body}",
+                   parse_mode="HTML")
+
+
+@dp.message(F.text == BTN_GROUP, F.chat.type == "private")
+async def adm_group(m: Message):
+    if not _admin_only(m):
+        return
+    await m.answer("Botni guruhga qo'shish uchun pastdagi tugmani bosing. "
+                   "Guruhда <b>admin</b> qilsangiz, xavfli fayllarni o'zim "
+                   "o'chiraman.", parse_mode="HTML", reply_markup=group_add_kb())
+
+
+@dp.message(F.text == BTN_CLOSE, F.chat.type == "private")
+async def adm_close(m: Message):
+    if not _admin_only(m):
+        return
+    await m.answer("Admin panel yopildi. Qayta ochish: /admin",
+                   reply_markup=ReplyKeyboardRemove())
 
 
 @dp.callback_query(F.data == "apk_perms")
@@ -579,8 +656,14 @@ async def on_text(m: Message):
 
 
 async def main():
+    global BOT_USERNAME
     await db.init()
-    logging.info("Bot ishga tushdi")
+    try:
+        me = await bot.get_me()
+        BOT_USERNAME = me.username or ""
+    except Exception:
+        pass
+    logging.info("Bot ishga tushdi (@%s)", BOT_USERNAME)
     await dp.start_polling(bot)
 
 
