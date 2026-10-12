@@ -47,6 +47,52 @@ def _advice(verdict):
 # Oxirgi APK hisoboti (foydalanuvchi bo'yicha) — "to'liq ruxsatlar" tugmasi uchun
 LAST_APK = {}
 
+# Android ruxsatlari -> sodda o'zbekcha tushuntirish (ilova shu bilan nima qiladi)
+PERM_INFO = {
+    # Tarmoq
+    "INTERNET": "Internetga ulanadi (serverga ma'lumot yuborishi mumkin)",
+    "ACCESS_WIFI_STATE": "Wi-Fi holatini ko'radi",
+    "ACCESS_NETWORK_STATE": "Internet ulanishini tekshiradi",
+    "CHANGE_WIFI_MULTICAST_STATE": "Mahalliy tarmoqdagi qurilmalarni qidiradi",
+    "CHANGE_WIFI_STATE": "Wi-Fi'ni yoqadi/o'chiradi",
+    "NFC": "NFC orqali aloqa qiladi (to'lov/teg o'qish)",
+    "BLUETOOTH": "Bluetooth bilan ishlaydi",
+    # Xavfli
+    "READ_SMS": "🔴 SMS'laringizni o'qiydi (bank kodlari ham)",
+    "RECEIVE_SMS": "🔴 Kelgan SMS'larni ushlaydi",
+    "SEND_SMS": "🔴 Sizning nomingizdan SMS yuboradi (pul yechilishi mumkin)",
+    "READ_CONTACTS": "🔴 Kontaktlaringizni o'qiydi",
+    "WRITE_CONTACTS": "Kontaktlarni o'zgartiradi",
+    "RECORD_AUDIO": "🔴 Mikrofondan ovoz yozadi",
+    "CAMERA": "🔴 Kamerangizdan foydalanadi",
+    "READ_CALL_LOG": "🔴 Qo'ng'iroqlar tarixini o'qiydi",
+    "CALL_PHONE": "O'zi qo'ng'iroq qiladi",
+    "READ_PHONE_STATE": "Telefon raqami va holatini o'qiydi",
+    "ACCESS_FINE_LOCATION": "Aniq joylashuvingizni biladi",
+    "ACCESS_COARSE_LOCATION": "Taxminiy joylashuvingizni biladi",
+    "SYSTEM_ALERT_WINDOW": "🔴 Boshqa ilovalar ustiga oyna chizadi (soxta oyna)",
+    "REQUEST_INSTALL_PACKAGES": "🔴 Telefoningizga boshqa ilova o'rnatadi",
+    "PACKAGE_USAGE_STATS": "Qaysi ilovadan foydalanishingizni kuzatadi",
+    "WRITE_EXTERNAL_STORAGE": "Xotiradagi fayllarni o'zgartiradi",
+    "READ_EXTERNAL_STORAGE": "Xotiradagi fayllarni o'qiydi",
+    "BIND_ACCESSIBILITY_SERVICE": "🔴 Ekraningizni o'qiydi va o'zi tugma bosadi",
+    # Fon / tizim
+    "FOREGROUND_SERVICE": "Fonda doimiy ishlaydi",
+    "FOREGROUND_SERVICE_SPECIAL_USE": "Fonda maxsus xizmat yuritadi",
+    "RECEIVE_BOOT_COMPLETED": "Telefon yonganda o'zi ishga tushadi",
+    "WAKE_LOCK": "Ekran/protsessorni uxlatmaydi",
+    "REORDER_TASKS": "Ilovalarni old planga chiqaradi",
+    "WRITE_SYNC_SETTINGS": "Sinxronlash sozlamalarini o'zgartiradi",
+    "READ_GSERVICES": "Google xizmatlari sozlamalarini o'qiydi",
+    "CHANGE_CONFIGURATION": "Tizim sozlamalarini o'zgartiradi (til/ekran)",
+    "GET_PACKAGE_SIZE": "Ilovalar qancha joy egallashini ko'radi",
+    "BROADCAST_STICKY": "Tizimga doimiy bildirishnoma yuboradi",
+    # Apparat
+    "VIBRATE": "Telefonni tebratadi",
+    "SET_WALLPAPER": "Ekran fonini o'zgartiradi",
+    "TRANSMIT_IR": "Infraqizil port orqali signal yuboradi (pult kabi)",
+}
+
 # Verdict'ga qarab bir qatorlik izoh
 VERDICT_SUMMARY = {
     "red": "Bu ilova xavfli. Uni o'rnatmang va ishonchli odamdan kelgan bo'lsa ham tekshiring.",
@@ -298,9 +344,17 @@ async def apk_perms_cb(c: CallbackQuery):
         await c.answer("Ma'lumot eskirgan. APK'ni qayta yuboring.", show_alert=True)
         return
     perms = info.get("permissions", [])
-    text = (f"📋 <b>{info['name']} — barcha ruxsatlar ({len(perms)})</b>\n\n"
-            + "\n".join(f"• <code>{p.split('.')[-1]}</code>" for p in perms))
-    await c.message.answer(text[:4000], parse_mode="HTML")
+    lines = [f"📋 <b>{info['name']} — barcha ruxsatlar ({len(perms)})</b>",
+             "<i>Har biri yonida ilova shu bilan nima qila olishi yozilgan.</i>", ""]
+    for p in perms:
+        short = p.split(".")[-1]
+        desc = PERM_INFO.get(short, "tizim ruxsati")
+        mark = "🔴 " if short in analyzers.DANGEROUS_PERMS else ""
+        lines.append(f"{mark}<b>{short}</b>\n   — {desc}")
+    text = "\n".join(lines)
+    # Telegram xabari 4096 belgidan oshmasligi uchun bo'laklab yuborish
+    for i in range(0, len(text), 3800):
+        await c.message.answer(text[i:i + 3800], parse_mode="HTML")
     await c.answer()
 
 
