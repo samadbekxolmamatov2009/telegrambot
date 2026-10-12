@@ -166,8 +166,25 @@ def again_kb():
     ]])
 
 
+def _uname(u):
+    return (u.full_name or "") + (f" @{u.username}" if u.username else "")
+
+
+async def remember(m, is_check=False):
+    """Foydalanuvchini bazaga yozadi (xato bo'lsa, ishni to'xtatmaydi)."""
+    try:
+        await db.touch_user(m.from_user.id, _uname(m.from_user), is_check)
+    except Exception:
+        pass
+
+
 @dp.message(CommandStart())
 async def start(m: Message):
+    await remember(m)
+    kb = None
+    if m.from_user.id in config.ADMIN_IDS:
+        kb = InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="🛠 Admin panel", callback_data="adm_open")]])
     await m.answer(
         "👋 Salom! Men <b>FiribTekshir</b> botman.\n\n"
         "Menga quyidagilardan birini yuboring:\n"
@@ -176,7 +193,7 @@ async def start(m: Message):
         "• 📎 Shubhali <b>fayl</b> (.apk yoki .zip)\n\n"
         "Men xavfli yoki xavfsizligini o'zbek tilida tushuntiraman.\n\n"
         "<i>Masalan: \"Kartangiz bloklandi, kodni yuboring\" deb yozib ko'ring.</i>",
-        parse_mode="HTML",
+        parse_mode="HTML", reply_markup=kb,
     )
 
 
@@ -195,8 +212,9 @@ def admin_kb():
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📊 Umumiy", callback_data="adm_stats"),
          InlineKeyboardButton(text="🕐 Oxirgilari", callback_data="adm_recent")],
-        [InlineKeyboardButton(text="🔴 Top xavflar", callback_data="adm_threats"),
-         InlineKeyboardButton(text="📡 Tokenlar", callback_data="adm_tokens")],
+        [InlineKeyboardButton(text="👥 Foydalanuvchilar", callback_data="adm_users"),
+         InlineKeyboardButton(text="🔴 Top xavflar", callback_data="adm_threats")],
+        [InlineKeyboardButton(text="📡 Tokenlar", callback_data="adm_tokens")],
     ])
 
 
@@ -240,8 +258,16 @@ async def admin_cb(c: CallbackQuery):
         return
     what = c.data
     try:
-        if what == "adm_stats":
+        if what in ("adm_stats", "adm_open"):
             text = await admin_stats_text()
+        elif what == "adm_users":
+            rows = await db.users_list(15)
+            total = await db.users_count()
+            head = f"👥 <b>Foydalanuvchilar: {total} ta</b>\n\n"
+            body = "\n".join(
+                f"• {(r[1] or 'Ismsiz')[:28]} — <code>{r[0]}</code> "
+                f"({r[2]} tekshiruv)" for r in rows) or "Hali yo'q"
+            text = head + "Oxirgi faol 15 tasi:\n" + body
         elif what == "adm_recent":
             rows = await db.recent(10)
             text = "🕐 <b>Oxirgi 10 tekshiruv</b>\n\n" + ("\n".join(
@@ -309,6 +335,7 @@ async def again_cb(c: CallbackQuery):
 
 @dp.message(F.text.regexp(r"https?://"))
 async def on_link(m: Message):
+    await remember(m, is_check=True)
     verdict, score, detail = analyzers.check_link(m.text)
     await db.log_check(m.from_user.id, "link", verdict, score, detail)
     await m.answer(verdict_text("link", verdict, score, detail),
@@ -317,6 +344,7 @@ async def on_link(m: Message):
 
 @dp.message(F.document)
 async def on_file(m: Message):
+    await remember(m, is_check=True)
     name = (m.document.file_name or "").lower()
     size_mb = (m.document.file_size or 0) / 1024 / 1024
     if size_mb > config.MAX_FILE_MB:
@@ -359,6 +387,7 @@ async def on_file(m: Message):
 
 @dp.message(F.text)
 async def on_text(m: Message):
+    await remember(m, is_check=True)
     verdict, score, detail = analyzers.check_text(m.text)
     await db.log_check(m.from_user.id, "text", verdict, score, detail)
     await m.answer(verdict_text("text", verdict, score, detail),

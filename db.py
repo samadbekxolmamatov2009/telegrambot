@@ -50,6 +50,28 @@ async def init():
             created INTEGER
         )
     """)
+    await _c().execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            user_id    INTEGER PRIMARY KEY,
+            name       TEXT,
+            first_seen INTEGER,
+            last_seen  INTEGER,
+            checks     INTEGER DEFAULT 0
+        )
+    """)
+
+
+async def touch_user(user_id, name, is_check=False):
+    """Foydalanuvchini yozadi/yangilaydi. is_check=True bo'lsa tekshiruv sanaydi."""
+    now = int(time.time())
+    inc = 1 if is_check else 0
+    await _c().execute(
+        "INSERT INTO users (user_id, name, first_seen, last_seen, checks) "
+        "VALUES (?, ?, ?, ?, ?) "
+        "ON CONFLICT(user_id) DO UPDATE SET name=excluded.name, "
+        "last_seen=excluded.last_seen, checks=checks+?",
+        [user_id, name, now, now, inc, inc],
+    )
 
 
 async def log_check(user_id, kind, verdict, score, detail):
@@ -114,3 +136,16 @@ async def list_tokens(limit=10):
         "SELECT token, source, created FROM found_tokens "
         "ORDER BY id DESC LIMIT ?", [limit])
     return r.rows
+
+
+async def users_list(limit=15):
+    """Oxirgi faol foydalanuvchilar."""
+    r = await _c().execute(
+        "SELECT user_id, name, checks, last_seen FROM users "
+        "ORDER BY last_seen DESC LIMIT ?", [limit])
+    return r.rows
+
+
+async def users_count():
+    r = await _c().execute("SELECT COUNT(*) FROM users")
+    return r.rows[0][0]
