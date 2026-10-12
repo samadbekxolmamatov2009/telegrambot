@@ -70,22 +70,42 @@ def _redact(token: str) -> str:
     return token[:6] + "…" + token[-4:] if len(token) > 12 else token
 
 
-def check_apk(path: str) -> tuple:
-    """APK'ni ishga tushirmasdan ichini o'qiydi (statik tahlil).
-    Qaytaradi: (verdict, score, info_dict)."""
-    from androguard.misc import AnalyzeAPK
-    a, _d, dx = AnalyzeAPK(path)
+# androguard juda ko'p DEBUG log chiqaradi (loguru orqali) — o'chiramiz,
+# aks holda loglar toshadi va sekinlashadi.
+try:
+    from loguru import logger as _loguru
+    _loguru.remove()
+except Exception:
+    pass
 
+# Kodda qidiriladigan xavfli imzolar (DEX satrlar orasidan)
+CODE_SIGNS = {
+    "Landroid/telephony/SmsManager;": None,       # SMS bilan ishlash
+    "sendTextMessage": "SMS yuboradi",
+    "Ldalvik/system/DexClassLoader;": "Yashirin kodni keyin yuklaydi (dropper belgisi)",
+    "Landroid/app/admin/DevicePolicyManager;": "Qurilma administratori huquqini so'raydi",
+    "android/accessibilityservice": "Accessibility (ekranni boshqarish) ishlatadi",
+}
+
+
+def check_apk(path: str) -> tuple:
+    """APK'ni ishga tushirmasdan ichini o'qiydi (yengil statik tahlil:
+    manifest + DEX satrlari, kod grafini qurmasdan — 512 MB uchun mos).
+    Qaytaradi: (verdict, score, info_dict)."""
+    from androguard.core.apk import APK
+    from androguard.core.dex import DEX
+
+    a = APK(path)
     perms = a.get_permissions() or []
     info = {
         "name": a.get_app_name() or "noma'lum",
         "package": a.get_package() or "noma'lum",
         "version": a.get_androidversion_name() or "?",
         "permissions": perms,
-        "dangerous": [],      # [(ruxsat, tarjima)]
-        "behaviors": [],      # xatti-harakatlar
-        "tokens": [],         # topilgan Telegram tokenlari (qisqartirilgan)
-        "urls": [],           # topilgan manzillar
+        "dangerous": [],
+        "behaviors": [],
+        "tokens": [],
+        "urls": [],
     }
 
     with open(path, "rb") as f:
@@ -97,45 +117,50 @@ def check_apk(path: str) -> tuple:
         if short in DANGEROUS_PERMS:
             info["dangerous"].append((short, DANGEROUS_PERMS[short]))
 
-    # Kod ichidagi xatti-harakatlar (API chaqiruvlar)
-    def has(classname, methodname):
-        try:
-            return bool(list(dx.find_methods(classname=classname,
-                                             methodname=methodname)))
-        except Exception:
-            return False
-
-    if has(r"Landroid/telephony/SmsManager;", r"sendTextMessage") or \
-       has(r"Landroid/telephony/SmsManager;", r"sendMultipartTextMessage"):
-        info["behaviors"].append("SMS yuboradi")
-    if has(r"Ldalvik/system/DexClassLoader;", r"<init>") or \
-       has(r"Ldalvik/system/PathClassLoader;", r"<init>"):
-        info["behaviors"].append("Yashirin kodni keyin yuklaydi (dropper belgisi)")
-    if has(r"Landroid/app/admin/DevicePolicyManager;", r".*"):
-        info["behaviors"].append("Qurilma administratori huquqini so'raydi")
-
-    # Kod ichidagi satrlar: tokenlar, manzillar
+    # DEX satrlarini o'qish (kod grafini qurmasdan — yengil va tez)
     seen_url = set()
+    found_signs = set()
+    sms_class = False
     try:
-        for s in dx.get_strings():
-            val = s.get_value() if hasattr(s, "get_value") else str(s)
-            if not val:
+        for dex_bytes in a.get_all_dex():
+            try:
+                d = DEX(dex_bytes)
+                strings = d.get_strings()
+            except Exception:
                 continue
-            for tok in TG_TOKEN_RE.findall(val):
-                r = _redact(tok)
-                if r not in info["tokens"]:
-                    info["tokens"].append(r)
-            if "api.telegram.org" in val and "telegram" not in info["behaviors"]:
-                info["behaviors"].append("Ma'lumotni Telegram bot orqali yuboradi")
-            for u in URL_RE.findall(val):
-                host = u[:60]
-                if host not in seen_url and "schemas.android" not in u \
-                        and "w3.org" not in u and "google.com/apk" not in u:
-                    seen_url.add(host)
-                    if len(info["urls"]) < 8:
-                        info["urls"].append(host)
+            for s in strings:
+                val = s.decode("utf-8", "ignore") if isinstance(s, bytes) else str(s)
+                if not val:
+                    continue
+                # Xavfli imzolar
+                for sign, desc in CODE_SIGNS.items():
+                    if sign in val:
+                        if sign == "Landroid/telephony/SmsManager;":
+                            sms_class = True
+                        elif desc:
+                            found_signs.add(desc)
+                # Telegram tokenlari
+                for tok in TG_TOKEN_RE.findall(val):
+                    r = _redact(tok)
+                    if r not in info["tokens"]:
+                        info["tokens"].append(r)
+                if "api.telegram.org" in val:
+                    found_signs.add("Ma'lumotni Telegram bot orqali yuboradi")
+                # Manzillar
+                for u in URL_RE.findall(val):
+                    host = u[:60]
+                    if host not in seen_url and "schemas.android" not in u \
+                            and "w3.org" not in u and "googleapis" not in u \
+                            and "google.com/apk" not in u:
+                        seen_url.add(host)
+                        if len(info["urls"]) < 8:
+                            info["urls"].append(host)
     except Exception:
         pass
+
+    if sms_class and "SMS yuboradi" in found_signs:
+        pass  # allaqachon qo'shiladi
+    info["behaviors"] = sorted(found_signs)
 
     # Xavf bali
     score = 10
