@@ -249,6 +249,11 @@ async def group_followup(m, verdict):
 @dp.message(CommandStart())
 async def start(m: Message):
     await remember(m)
+    # Guruhда tugma/panel ko'rsatmaymiz — faqat qisqa xabar
+    if is_group(m):
+        await m.answer("👋 Men bu guruhда tarqatilgan <b>.apk</b> va <b>.zip</b> "
+                       "fayllarni avtomatik tekshiraman.", parse_mode="HTML")
+        return
     rows = [[InlineKeyboardButton(
         text="➕ Meni guruhga qo'shish",
         url=f"https://t.me/{BOT_USERNAME}?startgroup=true" if BOT_USERNAME else "https://t.me")]]
@@ -369,6 +374,13 @@ async def open_admin_panel(m):
 
 @dp.message(Command("admin"))
 async def admin_panel(m: Message):
+    if is_group(m):
+        # Guruhда admin panel ochilmaydi (reply keyboard hammaga ko'rinadi)
+        if m.from_user.id in config.ADMIN_IDS:
+            await m.answer("🛠 Admin panel faqat men bilan <b>shaxsiy chatда</b> "
+                           "ochiladi. Menga yozing: @" + (BOT_USERNAME or ""),
+                           parse_mode="HTML")
+        return
     if m.from_user.id not in config.ADMIN_IDS:
         await m.answer("❌ Bu bo'lim faqat adminlar uchun.")
         return
@@ -379,6 +391,9 @@ async def admin_panel(m: Message):
 async def adm_open_cb(c: CallbackQuery):
     if c.from_user.id not in config.ADMIN_IDS:
         await c.answer("Faqat adminlar uchun", show_alert=True)
+        return
+    if c.message.chat.type != "private":
+        await c.answer("Admin panel faqat shaxsiy chatда ochiladi", show_alert=True)
         return
     await open_admin_panel(c.message)
     await c.answer()
