@@ -257,13 +257,11 @@ async def start(m: Message):
                                           callback_data="adm_open")])
     await m.answer(
         "👋 Salom! Men <b>FiribTekshir</b> botman.\n\n"
-        "Menga quyidagilardan birini yuboring:\n"
-        "• 📝 Shubhali <b>xabar</b> matnini\n"
-        "• 🔗 Shubhali <b>havola</b>ni\n"
-        "• 📎 Shubhali <b>fayl</b> (.apk yoki .zip)\n\n"
-        "Men xavfli yoki xavfsizligini o'zbek tilida tushuntiraman.\n"
-        "Meni guruhingizга ham qo'shishingiz mumkin 👇\n\n"
-        "<i>Masalan: \"Kartangiz bloklandi, kodni yuboring\" deb yozib ko'ring.</i>",
+        "Menga shubhali <b>ilova faylini</b> (.apk) yoki <b>arxivni</b> "
+        "(.zip) yuboring — men uni ochib, ichini tekshirib, xavfli yoki "
+        "xavfsizligini o'zbek tilida tushuntiraman.\n\n"
+        "Meni <b>guruhingizга</b> ham qo'shsangiz, u yerda tarqatilgan "
+        "xavfli ilovalarni o'zim ushlab, ogohlantiraman 👇",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
     )
@@ -542,16 +540,8 @@ async def again_cb(c: CallbackQuery):
     await c.answer()
 
 
-@dp.message(F.text.regexp(r"https?://"))
-async def on_link(m: Message):
-    await remember(m, is_check=True)
-    verdict, score, detail = analyzers.check_link(m.text)
-    await db.log_check(m.from_user.id, "link", verdict, score, detail)
-    # Guruhда faqat shubhali havolaga javob beramiz (shovqin bo'lmasin)
-    if is_group(m) and verdict == "green":
-        return
-    await m.answer(verdict_text("link", verdict, score, detail),
-                   parse_mode="HTML", reply_markup=again_kb())
+# Eslatma: bot faqat fayllarni (.apk/.zip) tahlil qiladi.
+# Matn va havolalar tahlil qilinmaydi (guruhда ham, shaxsiy chatда ham).
 
 
 @dp.message(F.document)
@@ -648,11 +638,13 @@ async def on_file(m: Message):
 
 @dp.message(F.text, F.chat.type == "private")
 async def on_text(m: Message):
-    await remember(m, is_check=True)
-    verdict, score, detail = analyzers.check_text(m.text)
-    await db.log_check(m.from_user.id, "text", verdict, score, detail)
-    await m.answer(verdict_text("text", verdict, score, detail),
-                   parse_mode="HTML", reply_markup=again_kb())
+    """Bot matnni tahlil qilmaydi — faqat .apk/.zip fayllarni tekshiradi."""
+    await remember(m)
+    await m.answer(
+        "📎 Menga shubhali <b>ilova faylini</b> (.apk) yoki <b>arxivni</b> "
+        "(.zip) yuboring — men uni ochib, xavfli yoki xavfsizligini "
+        "tushuntiraman.\n\n<i>Matn va havolalarni tekshirmayman.</i>",
+        parse_mode="HTML")
 
 
 async def main():

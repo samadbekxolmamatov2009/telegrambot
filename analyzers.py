@@ -352,20 +352,39 @@ def check_archive(path: str, passwords=None):
         if total > 300 * 1024 * 1024:
             return {"status": "error", "error": "arxiv juda katta (ZIP-bomba?)"}
 
+        # .zip aslida APK'ning o'zimi? (APK ham zip; ichida AndroidManifest bor)
+        is_apk_itself = any(n.endswith("AndroidManifest.xml") for n in names) and \
+            any(n.endswith("classes.dex") for n in names)
         apk_names = [n for n in names if n.lower().endswith(".apk")]
-        if not apk_names:
-            return {"status": "no_apk", "names": names[:20],
-                    "encrypted": encrypted}
 
-        target = apk_names[0]
-        pw_used = None
-        data = None
-        pw_list = list(passwords or []) + COMMON_PW
+    # Fayl aslida APK bo'lsa — to'g'ridan-to'g'ri tahlil qilamiz.
+    # (APK'da soxta "shifr" bayrog'i bo'lishi mumkin — androguard baribir o'qiydi.)
+    if is_apk_itself:
+        try:
+            verdict, score, info = check_apk(path)
+        except Exception as e:
+            return {"status": "error", "error": str(e)}
+        info.setdefault("behaviors", [])
+        info["behaviors"].insert(0, "Fayl .zip deb atalgan, lekin aslida APK (ilova)")
+        if score < 50:
+            score = max(score, 50)
+            verdict = "red" if score >= 70 else "yellow"
+        return {"status": "apk", "verdict": verdict, "score": score,
+                "info": info, "password": None, "apk_name": "(fayl o'zi APK)"}
+
+    if not apk_names:
+        return {"status": "no_apk", "names": names[:20], "encrypted": encrypted}
+
+    target = apk_names[0]
+    pw_used = None
+    data = None
+    pw_list = list(passwords or []) + COMMON_PW
+    with pyzipper.AESZipFile(path) as z2:
         if encrypted:
             for pw in pw_list:
                 try:
-                    z.setpassword(pw.encode())
-                    data = z.read(target)
+                    z2.setpassword(pw.encode())
+                    data = z2.read(target)
                     pw_used = pw
                     break
                 except Exception:
@@ -375,7 +394,7 @@ def check_archive(path: str, passwords=None):
                         "names": names[:20]}
         else:
             try:
-                data = z.read(target)
+                data = z2.read(target)
             except Exception as e:
                 return {"status": "error", "error": str(e)}
 
