@@ -204,13 +204,23 @@ def check_apk(path: str) -> tuple:
         found_signs.add("Kodni shifrlab yashiradi (packer: AES/Cipher + yuklash)")
         packer.append("crypto_pack")
 
-    # 5. Niqoblash: nomi "rasm/video/foto", paketi mutlaqo boshqa
+    # 5. Niqoblash
     disguise_words = ("rasm", "photo", "video", "galereya", "gallery", "foto",
-                      "player", "music", "pdf", "hujjat", "surat")
+                      "player", "music", "pdf", "hujjat", "surat", "arxiv",
+                      "arxivi", "to'y", "toy", "album", "surat")
     nm = (info["name"] or "").lower()
-    if any(w in nm for w in disguise_words) and packer:
+    # Nomi fayldek ko'rsatilgan (.jpeg/.pdf/.mp4...) — ilova hech qachon bunday atalmaydi
+    ext_m = re.search(r"\.(jpe?g|png|gif|bmp|pdf|docx?|xlsx?|pptx?|mp4|mp3|wav|zip|rar|apk|txt|heic)\b", nm)
+    if ext_m:
+        found_signs.add(f"Niqoblangan: nomi fayldek ko'rsatilgan ('{ext_m.group(0)}')")
+        packer.append("disguise")
+    elif any(w in nm for w in disguise_words) and packer:
         found_signs.add("Niqoblangan: oddiy ilova ko'rinadi, lekin kodi yashirilgan")
         packer.append("disguise")
+    # Paket nomida "hidden" kabi so'z
+    if "hidden" in (info["package"] or "").lower():
+        found_signs.add("Paket nomida 'hidden' (yashirin) so'zi bor")
+        packer.append("sus_pkg")
 
     info["behaviors"] = sorted(found_signs)
     info["_packer"] = packer
@@ -251,9 +261,13 @@ def check_apk(path: str) -> tuple:
         score += 15
     if "disguise" in pk:
         score += 20
-    # Bir nechta packer belgisi birga bo'lsa — aniq xavfli
-    if len([x for x in pk if x in ("crypto_pack", "hidden_payload", "enc_zip",
-                                   "native", "hide_icon", "disguise")]) >= 3:
+    if "sus_pkg" in pk:
+        score += 15
+    # Ikki yoki undan ortiq KUCHLI belgi birga bo'lsa — aniq xavfli
+    # (native o'zi oddiy ilovalarda ham bo'ladi, shuning uchun kuchli emas)
+    STRONG = ("crypto_pack", "hidden_payload", "enc_zip", "hide_icon",
+              "disguise", "sus_pkg")
+    if len([x for x in pk if x in STRONG]) >= 2:
         score = max(score, 75)
 
     score = min(score, 100)
