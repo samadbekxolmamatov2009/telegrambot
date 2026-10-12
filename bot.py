@@ -264,15 +264,6 @@ async def start(m: Message):
     if is_group(m):
         return
     await remember(m)
-    grp_url = f"https://t.me/{BOT_USERNAME}?startgroup=true" if BOT_USERNAME else "https://t.me"
-    rows = [
-        [InlineKeyboardButton(text="🗂 Tekshirilgan APKlar",
-                              callback_data="my_apks")],
-        [InlineKeyboardButton(text="➕ Guruhga qo'shish", url=grp_url)],
-    ]
-    if m.from_user.id in config.ADMIN_IDS:
-        rows.append([InlineKeyboardButton(text="🛠 Admin panel",
-                                          callback_data="adm_open")])
     await m.answer(
         "👋 Salom! Men <b>Apk aniqlovchi</b> botman.\n\n"
         "Menga shubhali <b>ilova faylini</b> (.apk) yoki <b>arxivni</b> "
@@ -281,7 +272,7 @@ async def start(m: Message):
         "Meni <b>guruhingizга</b> ham qo'shsangiz, u yerda tarqatilgan "
         "xavfli ilovalarni o'zim ushlab, ogohlantiraman.",
         parse_mode="HTML",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
+        reply_markup=main_menu_kb(m.from_user.id in config.ADMIN_IDS),
     )
 
 
@@ -334,14 +325,26 @@ def group_add_kb():
         InlineKeyboardButton(text="➕ Meni guruhga qo'shish", url=url)]])
 
 
-# Admin panel — rasmdagidek katta, doimiy tugmalar (reply keyboard)
+# Asosiy menyu (hamma uchun) va admin menyu — katta, doimiy tugmalar
+BTN_HISTORY = "🗂 Tekshirilgan APKlar"
+BTN_GROUP = "➕ Guruhga qo'shish"
+BTN_ADMIN = "🛠 Admin panel"
+
 BTN_STATS = "📊 Statistika"
 BTN_USERS = "👥 Foydalanuvchilar"
 BTN_RECENT = "🕐 Oxirgi tekshiruvlar"
 BTN_THREATS = "🔴 Top xavflar"
 BTN_TOKENS = "📡 Topilgan tokenlar"
-BTN_GROUP = "➕ Guruhga qo'shish"
 BTN_CLOSE = "❌ Panelni yopish"
+
+
+def main_menu_kb(is_admin=False):
+    rows = [[KeyboardButton(text=BTN_HISTORY)],
+            [KeyboardButton(text=BTN_GROUP)]]
+    if is_admin:
+        rows.append([KeyboardButton(text=BTN_ADMIN)])
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True,
+                               input_field_placeholder="Fayl yuboring yoki tugmani tanlang")
 
 
 def admin_menu_kb():
@@ -468,21 +471,11 @@ async def adm_tokens(m: Message):
                    parse_mode="HTML")
 
 
-@dp.message(F.text == BTN_GROUP, F.chat.type == "private")
-async def adm_group(m: Message):
-    if not _admin_only(m):
-        return
-    await m.answer("Botni guruhga qo'shish uchun pastdagi tugmani bosing. "
-                   "Guruhда <b>admin</b> qilsangiz, xavfli fayllarni o'zim "
-                   "o'chiraman.", parse_mode="HTML", reply_markup=group_add_kb())
-
-
 @dp.message(F.text == BTN_CLOSE, F.chat.type == "private")
 async def adm_close(m: Message):
     if not _admin_only(m):
         return
-    await m.answer("Admin panel yopildi. Qayta ochish: /admin",
-                   reply_markup=ReplyKeyboardRemove())
+    await m.answer("Admin panel yopildi.", reply_markup=main_menu_kb(True))
 
 
 @dp.callback_query(F.data == "apk_perms")
@@ -559,21 +552,42 @@ async def apk_tech_cb(c: CallbackQuery):
     await c.answer()
 
 
-@dp.callback_query(F.data == "my_apks")
-async def my_apks_cb(c: CallbackQuery):
+async def history_text(user_id):
     import datetime
-    rows = await db.user_checks(c.from_user.id, 15)
+    rows = await db.user_checks(user_id, 15)
     if not rows:
-        await c.message.answer("🗂 Siz hali birorta APK tekshirmagansiz.\n"
-                               "Menga .apk yoki .zip fayl yuboring.")
-        await c.answer()
-        return
+        return ("🗂 Siz hali birorta APK tekshirmagansiz.\n"
+                "Menga .apk yoki .zip fayl yuboring.")
     lines = ["🗂 <b>Siz tekshirgan oxirgi APKlar</b>\n"]
     for verdict, score, detail, created in rows:
         dt = datetime.datetime.fromtimestamp(created).strftime("%d.%m %H:%M")
         lines.append(f"{EMOJI.get(verdict, '')} <b>{score}/100</b> · "
                      f"{(detail or '')[:35]} <i>({dt})</i>")
-    await c.message.answer("\n".join(lines), parse_mode="HTML")
+    return "\n".join(lines)
+
+
+@dp.message(F.text == BTN_HISTORY, F.chat.type == "private")
+async def my_apks_btn(m: Message):
+    await m.answer(await history_text(m.from_user.id), parse_mode="HTML")
+
+
+@dp.message(F.text == BTN_GROUP, F.chat.type == "private")
+async def group_btn(m: Message):
+    await m.answer("Meni guruhga qo'shish uchun pastdagi tugmani bosing 👇\n"
+                   "Guruhда <b>admin</b> qilsangiz, xavfli fayllarni o'zim "
+                   "o'chiraman.", parse_mode="HTML", reply_markup=group_add_kb())
+
+
+@dp.message(F.text == BTN_ADMIN, F.chat.type == "private")
+async def admin_btn(m: Message):
+    if m.from_user.id not in config.ADMIN_IDS:
+        return
+    await open_admin_panel(m)
+
+
+@dp.callback_query(F.data == "my_apks")
+async def my_apks_cb(c: CallbackQuery):
+    await c.message.answer(await history_text(c.from_user.id), parse_mode="HTML")
     await c.answer()
 
 
