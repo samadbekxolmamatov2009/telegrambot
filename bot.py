@@ -248,12 +248,10 @@ async def group_followup(m, verdict):
 
 @dp.message(CommandStart())
 async def start(m: Message):
-    await remember(m)
-    # Guruhда tugma/panel ko'rsatmaymiz — faqat qisqa xabar
+    # Guruhда bot hech qanday so'rovga javob bermaydi — faqat fayllarni tekshiradi
     if is_group(m):
-        await m.answer("👋 Men bu guruhда tarqatilgan <b>.apk</b> va <b>.zip</b> "
-                       "fayllarni avtomatik tekshiraman.", parse_mode="HTML")
         return
+    await remember(m)
     rows = [[InlineKeyboardButton(
         text="➕ Meni guruhga qo'shish",
         url=f"https://t.me/{BOT_USERNAME}?startgroup=true" if BOT_USERNAME else "https://t.me")]]
@@ -301,6 +299,8 @@ async def on_added_to_chat(u: ChatMemberUpdated):
 @dp.message(Command("id"))
 async def my_id(m: Message):
     """O'z Telegram ID'ingizni ko'rsatadi (admin ID'ni bilish uchun)."""
+    if is_group(m):
+        return  # guruhда javob bermaydi
     is_admin = m.from_user.id in config.ADMIN_IDS
     await m.answer(
         f"🆔 Sizning ID: <code>{m.from_user.id}</code>\n"
@@ -374,12 +374,8 @@ async def open_admin_panel(m):
 
 @dp.message(Command("admin"))
 async def admin_panel(m: Message):
+    # Guruhда admin panel umuman ochilmaydi va javob berilmaydi
     if is_group(m):
-        # Guruhда admin panel ochilmaydi (reply keyboard hammaga ko'rinadi)
-        if m.from_user.id in config.ADMIN_IDS:
-            await m.answer("🛠 Admin panel faqat men bilan <b>shaxsiy chatда</b> "
-                           "ochiladi. Menga yozing: @" + (BOT_USERNAME or ""),
-                           parse_mode="HTML")
         return
     if m.from_user.id not in config.ADMIN_IDS:
         await m.answer("❌ Bu bo'lim faqat adminlar uchun.")
