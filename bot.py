@@ -245,20 +245,64 @@ def is_group(m):
 
 
 async def group_result(m, verdict, name=""):
-    """Guruhда qisqa javob: to'liq hisobot YO'Q. Faqat xavfli bo'lsa
-    'topildi va o'chirildi' deydi; xavfsiz/shubhaliga jim turadi."""
+    """Guruh/kanalда qisqa javob: to'liq hisobot YO'Q, tugma YO'Q.
+    Faqat xavfli bo'lsa 'topildi va o'chirildi' deydi; aks holda jim."""
     if verdict != "red":
         return  # faqat xavfli APK haqida xabar beradi
     label = f" «{name}»" if name else ""
+    # ReplyKeyboardRemove — eski versiyadan qolgan tugmalarni ham tozalaydi
     try:
         await m.delete()
         await m.answer(f"🚨 <b>Xavfli ilova{label} topildi va o'chirildi.</b>\n"
-                       "Uni hech kim ochmasin!", parse_mode="HTML")
+                       "Uni hech kim ochmasin!", parse_mode="HTML",
+                       reply_markup=ReplyKeyboardRemove())
     except Exception:
         await m.answer(f"🚨 <b>Diqqat! Xavfli ilova{label} topildi.</b>\n"
-                       "Men uni o'chira olmadim — meni guruhда <b>admin</b> qiling "
+                       "Men uni o'chira olmadim — meni <b>admin</b> qiling "
                        "(xabar o'chirish huquqi bilan). Hozircha hech kim ochmasin!",
-                       parse_mode="HTML")
+                       parse_mode="HTML", reply_markup=ReplyKeyboardRemove())
+
+
+async def short_scan(m):
+    """Guruh/kanal uchun: faqat xavfli APK topilsa o'chirib xabar beradi.
+    Tahlil statusi, to'liq hisobot va tugmalar — yo'q."""
+    doc = m.document
+    name = (doc.file_name or "").lower()
+    if (doc.file_size or 0) / 1024 / 1024 > config.MAX_FILE_MB:
+        return
+    uid = m.from_user.id if m.from_user else m.chat.id
+    tmp = tempfile.mkdtemp()
+    p = os.path.join(tmp, "f")
+    try:
+        await bot.download(doc, destination=p)
+        if name.endswith(".apk"):
+            verdict, score, info = await asyncio.to_thread(analyzers.check_apk, p)
+            try:
+                await db.log_check(uid, "apk", verdict, score,
+                                   f"{info['name']} ({info['package']})")
+            except Exception:
+                pass
+            await group_result(m, verdict, info["name"])
+        elif name.endswith(".zip"):
+            res = await asyncio.to_thread(analyzers.check_archive, p, [])
+            if res.get("status") == "apk":
+                info = res["info"]
+                try:
+                    await db.log_check(uid, "archive", res["verdict"],
+                                       res["score"], f"{info['name']} (arxivда)")
+                except Exception:
+                    pass
+                await group_result(m, res["verdict"], info["name"])
+    except Exception:
+        logging.exception("short_scan xatosi")
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+@dp.channel_post(F.document)
+async def on_channel_file(post: Message):
+    """Kanalда tarqatilgan .apk/.zip — jimgina tekshiradi, xavflini o'chiradi."""
+    await short_scan(post)
 
 
 @dp.message(CommandStart())
@@ -279,30 +323,8 @@ async def start(m: Message):
     )
 
 
-@dp.my_chat_member()
-async def on_added_to_chat(u: ChatMemberUpdated):
-    """Bot guruhга qo'shilganda qisqa yo'riqnoma yuboradi."""
-    if u.chat.type not in ("group", "supergroup"):
-        return
-    if u.new_chat_member.status not in ("member", "administrator"):
-        return
-    is_admin = u.new_chat_member.status == "administrator"
-    text = (
-        "👋 Salom! Men <b>Apk aniqlovchi</b> — bu guruhда tarqatilgan "
-        "<b>.apk</b> va <b>.zip</b> fayllarni avtomatik tekshiraman.\n\n"
-        "Kimdir shubhali fayl yuborsa, men uni tahlil qilib, xavfli yoki "
-        "yo'qligini hammaga aytaman.\n\n"
-    )
-    if is_admin:
-        text += ("✅ Men admin qilindim — xavfli fayllarni o'zim "
-                 "<b>o'chiraman</b>.")
-    else:
-        text += ("ℹ️ Agar meni <b>admin</b> qilsangiz (xabar o'chirish huquqi "
-                 "bilan), xavfli fayllarni o'zim o'chira olaman.")
-    try:
-        await bot.send_message(u.chat.id, text, parse_mode="HTML")
-    except Exception:
-        pass
+# Bot guruh/kanalга qo'shilganда hech qanday xabar yoki tugma yubormaydi.
+# Shunchaki turadi va faqat xavfli APK topilganда o'sha haqda xabar beradi.
 
 
 @dp.message(Command("id"))
@@ -635,6 +657,10 @@ async def again_cb(c: CallbackQuery):
 
 @dp.message(F.document)
 async def on_file(m: Message):
+    # Guruhда: jimgina tekshiradi, faqat xavfli APK haqida xabar beradi
+    if is_group(m):
+        await short_scan(m)
+        return
     await remember(m, is_check=True)
     name = (m.document.file_name or "").lower()
     size_mb = (m.document.file_size or 0) / 1024 / 1024
@@ -642,7 +668,7 @@ async def on_file(m: Message):
         await m.answer(f"⚠️ Fayl juda katta ({size_mb:.0f} MB). "
                        f"Men {config.MAX_FILE_MB} MB gacha tekshira olaman.")
         return
-    grp = is_group(m)
+    grp = False
     if name.endswith(".apk"):
         if not grp:
             await m.answer("⏳ APK tahlil qilyapman... (ruxsatlar, kod, tokenlar)")
