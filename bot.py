@@ -244,28 +244,36 @@ def is_group(m):
     return m.chat.type in ("group", "supergroup")
 
 
-async def group_result(m, verdict, name=""):
-    """Guruh/kanalда qisqa javob: to'liq hisobot YO'Q, tugma YO'Q.
-    Faqat xavfli bo'lsa 'topildi va o'chirildi' deydi; aks holda jim."""
-    if verdict != "red":
-        return  # faqat xavfli APK haqida xabar beradi
-    label = f" «{name}»" if name else ""
-    # ReplyKeyboardRemove — eski versiyadan qolgan tugmalarni ham tozalaydi
-    try:
-        await m.delete()
-        await m.answer(f"🚨 <b>Xavfli ilova{label} topildi va o'chirildi.</b>\n"
-                       "Uni hech kim ochmasin!", parse_mode="HTML",
-                       reply_markup=ReplyKeyboardRemove())
-    except Exception:
-        await m.answer(f"🚨 <b>Diqqat! Xavfli ilova{label} topildi.</b>\n"
-                       "Men uni o'chira olmadim — meni <b>admin</b> qiling "
-                       "(xabar o'chirish huquqi bilan). Hozircha hech kim ochmasin!",
-                       parse_mode="HTML", reply_markup=ReplyKeyboardRemove())
+def _sender_line(m):
+    """Faylni kim yuborgani (guruhда ko'rsatish uchun)."""
+    u = getattr(m, "from_user", None)
+    if not u:
+        return "📢 <b>Kanalga joylangan</b>"
+    who = u.full_name or "Ismsiz"
+    tail = f" @{u.username}" if u.username else ""
+    return f"📤 <b>Yuboruvchi:</b> {who}{tail} (<code>{u.id}</code>)"
+
+
+async def group_report(m, verdict, score, info):
+    """Guruh/kanalда: kim tashlagani + to'liq tahlil. Xavflini o'chiradi.
+    (Tugmasiz — chatда tugma bezovta qiladi.)"""
+    note = ""
+    if verdict == "red":
+        try:
+            await m.delete()
+            note = "\n\n🗑 <b>Bu xavfli fayl o'chirildi. Hech kim ochmasin!</b>"
+        except Exception:
+            note = ("\n\n⚠️ <b>Men o'chira olmadim</b> — meni guruhда admin qiling. "
+                    "Hozircha hech kim ochmasin!")
+    text = _sender_line(m) + "\n\n" + format_apk(verdict, score, info) + note
+    for i in range(0, len(text), 3800):
+        await m.answer(text[i:i + 3800], parse_mode="HTML",
+                       reply_markup=ReplyKeyboardRemove() if i == 0 else None)
 
 
 async def short_scan(m):
-    """Guruh/kanal uchun: faqat xavfli APK topilsa o'chirib xabar beradi.
-    Tahlil statusi, to'liq hisobot va tugmalar — yo'q."""
+    """Guruh/kanal uchun: .apk/.zip ni tahlil qiladi, kim tashlaganini aytadi,
+    to'liq ma'lumotni ko'rsatadi; xavflini o'chiradi."""
     doc = m.document
     name = (doc.file_name or "").lower()
     if (doc.file_size or 0) / 1024 / 1024 > config.MAX_FILE_MB:
@@ -280,9 +288,11 @@ async def short_scan(m):
             try:
                 await db.log_check(uid, "apk", verdict, score,
                                    f"{info['name']} ({info['package']})")
+                for t in info.get("tokens", []):
+                    await db.save_token(t, info["package"])
             except Exception:
                 pass
-            await group_result(m, verdict, info["name"])
+            await group_report(m, verdict, score, info)
         elif name.endswith(".zip"):
             res = await asyncio.to_thread(analyzers.check_archive, p, [])
             if res.get("status") == "apk":
@@ -292,11 +302,18 @@ async def short_scan(m):
                                        res["score"], f"{info['name']} (arxivда)")
                 except Exception:
                     pass
-                await group_result(m, res["verdict"], info["name"])
+                await group_report(m, res["verdict"], res["score"], info)
+            elif res.get("status") == "locked":
+                await m.answer(_sender_line(m) + "\n\n🔒 <b>Parolli arxiv</b> — "
+                               "ichida ilova bor, lekin oddiy parol bilan "
+                               "ocholmadim. Ehtiyot bo'ling, ochmang.",
+                               parse_mode="HTML")
     except Exception:
         logging.exception("short_scan xatosi")
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+        import gc
+        gc.collect()  # androguard obyektlarini bo'shatish (xotira)
 
 
 @dp.channel_post(F.document)
@@ -701,6 +718,7 @@ async def on_file(m: Message):
                                f"baribir ehtiyot bo'ling.", parse_mode="HTML")
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
+            import gc; gc.collect()
     elif name.endswith(".zip"):
         if not grp:
             await m.answer("🔐 Arxivni ochyapman va ichidagini tekshiryapman...")
@@ -756,6 +774,7 @@ async def on_file(m: Message):
                                parse_mode="HTML")
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
+            import gc; gc.collect()
     elif name.endswith((".rar", ".7z")):
         if not grp:
             await m.answer("ℹ️ Hozircha faqat .zip arxivlarni ocha olaman. "
