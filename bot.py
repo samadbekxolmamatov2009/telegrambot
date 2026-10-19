@@ -118,6 +118,9 @@ WHAT_IT_DOES = {
         "Telefoningiz ustidan to'liq nazorat so'raydi",
     "Native kod yuklaydi (.so kutubxona)":
         "Yashirin qo'shimcha dastur ishga tushiradi",
+    "Boshqa ilova o'rnatadi + barcha ilovalarni kuzatadi (dropper kombinatsiyasi)":
+        "Telefoningizga yashirincha boshqa ilova o'rnatadi va "
+        "qaysi (masalan bank) ilovalaringiz borligini biladi",
 }
 # "Nimasi shubhali" — aldov/yashirish belgilari (hammasi bitta ma'noga yig'iladi)
 WHY_SUSPICIOUS = {
@@ -127,6 +130,8 @@ WHY_SUSPICIOUS = {
         "Haqiqiy dasturini ichida shifrlab yashirgan",
     "Shubhali yashirin fayl (shifrlangan payload bo'lishi mumkin)":
         "Haqiqiy dasturini ichida shifrlab yashirgan",
+    "Shifrlangan yashirin fayl topildi (payload) — haqiqiy ish shu yerda yashirilgan":
+        "Haqiqiy (zararli) dasturini ichida shifrlab yashirgan — o'rnatgач ochadi",
     "Ikonkasini yashirishi mumkin":
         "O'rnatilgach ekrandan yo'qoladi — topib o'chirish qiyin bo'ladi",
     "Niqoblangan: oddiy ilova ko'rinadi, lekin kodi yashirilgan":

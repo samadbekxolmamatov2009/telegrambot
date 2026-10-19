@@ -59,6 +59,9 @@ DANGEROUS_PERMS = {
     "RECEIVE_BOOT_COMPLETED": "Telefon yonganda o'zi ishga tushadi",
     "READ_PHONE_STATE": "Telefon raqami/holatini o'qiydi",
     "PACKAGE_USAGE_STATS": "Qaysi ilovalardan foydalanishingizni kuzatadi",
+    "QUERY_ALL_PACKAGES": "Telefondagi barcha ilovalar ro'yxatini oladi "
+                          "(bank ilovalarini aniqlash uchun)",
+    "BIND_ACCESSIBILITY_SERVICE": "Ekraningizni o'qiydi va o'zi tugma bosadi",
 }
 
 TG_TOKEN_RE = re.compile(r"\d{8,10}:[A-Za-z0-9_-]{35}")
@@ -131,6 +134,23 @@ def _zinfo_size(z, name: str) -> int:
         return z.getinfo(name).file_size
     except Exception:
         return 0
+
+
+def _entropy_of(z, name: str, sample: int = 262144) -> float:
+    """Fayl boshidan namuna olib entropiyani hisoblaydi (0..8).
+    8 ga yaqin = shifrlangan/siqilgan. Tez bo'lishi uchun faqat namuna."""
+    import math
+    from collections import Counter
+    try:
+        with z.open(name) as f:
+            data = f.read(sample)
+    except Exception:
+        return 0.0
+    if not data:
+        return 0.0
+    c = Counter(data)
+    n = len(data)
+    return -sum((v / n) * math.log2(v / n) for v in c.values())
 
 
 # androguard juda ko'p DEBUG log chiqaradi (loguru orqali) — o'chiramiz,
@@ -279,12 +299,32 @@ def check_apk(path: str) -> tuple:
         if any(n.startswith("lib/") and n.endswith(".so") for n in names):
             found_signs.add("Native kod yuklaydi (.so kutubxona)")
             packer.append("native")
-        # 3. assets ichida soxta nomli yirik fayl (media kengaytma, lekin katta)
-        fake = [n for n in names if n.startswith("assets/") and
-                n.lower().endswith((".wma", ".mp3", ".mp4", ".dat", ".png", ".jpg", ".bin"))
-                and _zinfo_size(z, n) > 50_000]
-        if fake:
-            found_signs.add("Shubhali yashirin fayl (shifrlangan payload bo'lishi mumkin)")
+        # 3. Yashirin shifrlangan payload:
+        #    (a) media/dat kengaytmali yirik asset, yoki
+        #    (b) matndek atalgan (.json/.txt/.xml...) fayl, lekin ENTROPIYASI yuqori
+        #        (haqiqiy JSON ~5, 7.4+ = shifrlangan/siqilgan => soxta)
+        TEXTLIKE = (".json", ".txt", ".xml", ".csv", ".cfg", ".properties",
+                    ".html", ".js", ".db", ".conf", ".ini", ".yml", ".yaml")
+        MEDIA = (".wma", ".mp3", ".mp4", ".dat", ".png", ".jpg", ".bin", ".3gp")
+        hidden = []
+        for n in names:
+            if not n.startswith("assets/"):
+                continue
+            sz = _zinfo_size(z, n)
+            low = n.lower()
+            if low.endswith(MEDIA) and sz > 50_000:
+                hidden.append(n)
+            elif low.endswith(TEXTLIKE) and sz > 30_000:
+                # matndek atalgan faylning entropiyasini tekshiramiz
+                if _entropy_of(z, n) > 7.2:
+                    hidden.append(n)
+            elif ("." not in low.rsplit("/", 1)[-1]) and sz > 100_000:
+                # kengaytmasiz yirik asset — entropiya yuqori bo'lsa shubhali
+                if _entropy_of(z, n) > 7.4:
+                    hidden.append(n)
+        if hidden:
+            found_signs.add("Shifrlangan yashirin fayl topildi (payload) — "
+                            "haqiqiy ish shu yerda yashirilgan")
             packer.append("hidden_payload")
         # 4. Ikonka yashirish belgisi
         if any("hidden" in n.lower() and "logo" in n.lower() for n in names) or \
@@ -322,6 +362,13 @@ def check_apk(path: str) -> tuple:
         found_signs.add("Soxta imzo: o'zini Google/Android deb ko'rsatgan")
         packer.append("fake_cert")
 
+    # Dropper kombinatsiyasi: boshqa ilova o'rnatish + barcha ilovalarni ko'rish
+    _ps = {p.split(".")[-1] for p in perms}
+    if "REQUEST_INSTALL_PACKAGES" in _ps and "QUERY_ALL_PACKAGES" in _ps:
+        found_signs.add("Boshqa ilova o'rnatadi + barcha ilovalarni kuzatadi "
+                        "(dropper kombinatsiyasi)")
+        packer.append("dropper_combo")
+
     info["behaviors"] = sorted(found_signs)
     info["_packer"] = packer
 
@@ -337,6 +384,8 @@ def check_apk(path: str) -> tuple:
     if "RECEIVE_BOOT_COMPLETED" in perm_shorts:
         score += 10
     if "REQUEST_INSTALL_PACKAGES" in perm_shorts:
+        score += 10
+    if "QUERY_ALL_PACKAGES" in perm_shorts:
         score += 10
     if any("Telegram" in b for b in info["behaviors"]):
         score += 25
@@ -365,11 +414,17 @@ def check_apk(path: str) -> tuple:
         score += 15
     if "fake_cert" in pk:
         score += 25
+    if "dropper_combo" in pk:
+        score += 20
     # Ikki yoki undan ortiq KUCHLI belgi birga bo'lsa — aniq xavfli
     # (native o'zi oddiy ilovalarda ham bo'ladi, shuning uchun kuchli emas)
     STRONG = ("crypto_pack", "hidden_payload", "enc_zip", "hide_icon",
-              "disguise", "sus_pkg", "fake_cert")
+              "disguise", "sus_pkg", "fake_cert", "dropper_combo")
     if len([x for x in pk if x in STRONG]) >= 2:
+        score = max(score, 75)
+    # Yashirin shifrlangan payload o'zi ham juda kuchli dalil
+    if "hidden_payload" in pk and ("REQUEST_INSTALL_PACKAGES" in perm_shorts
+                                   or "disguise" in pk or "dropper_combo" in pk):
         score = max(score, 75)
 
     score = min(score, 100)
