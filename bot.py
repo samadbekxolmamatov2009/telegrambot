@@ -244,18 +244,21 @@ def is_group(m):
     return m.chat.type in ("group", "supergroup")
 
 
-async def group_followup(m, verdict):
-    """Guruhда: xavfli fayl bo'lsa, o'chirishga urinadi (bot admin bo'lsa)."""
-    if not is_group(m) or verdict != "red":
-        return
+async def group_result(m, verdict, name=""):
+    """Guruhда qisqa javob: to'liq hisobot YO'Q. Faqat xavfli bo'lsa
+    'topildi va o'chirildi' deydi; xavfsiz/shubhaliga jim turadi."""
+    if verdict != "red":
+        return  # faqat xavfli APK haqida xabar beradi
+    label = f" «{name}»" if name else ""
     try:
         await m.delete()
-        await m.answer("🗑 <b>Bu xavfli fayl guruhdan o'chirildi.</b> "
-                       "Hech kim ochmasin!", parse_mode="HTML")
+        await m.answer(f"🚨 <b>Xavfli ilova{label} topildi va o'chirildi.</b>\n"
+                       "Uni hech kim ochmasin!", parse_mode="HTML")
     except Exception:
-        await m.answer("⚠️ <b>Diqqat, xavfli fayl!</b> Men uni o'chira olmadim — "
-                       "meni guruhда admin qiling (xabar o'chirish huquqi bilan), "
-                       "shunda bunday fayllarni o'zim o'chiraman.", parse_mode="HTML")
+        await m.answer(f"🚨 <b>Diqqat! Xavfli ilova{label} topildi.</b>\n"
+                       "Men uni o'chira olmadim — meni guruhда <b>admin</b> qiling "
+                       "(xabar o'chirish huquqi bilan). Hozircha hech kim ochmasin!",
+                       parse_mode="HTML")
 
 
 @dp.message(CommandStart())
@@ -511,8 +514,28 @@ async def apk_tech_cb(c: CallbackQuery):
         f"• Ko'rinadigan nomi: <b>{info['name']}</b>",
         f"• Haqiqiy ichki nomi: <code>{info['package']}</code>",
         f"• Versiya: {info['version']} · Hajmi: {info.get('size_kb', '?')} KB",
+        f"• Android SDK: min {info.get('min_sdk', '?')} / target {info.get('target_sdk', '?')}",
         f"• Ruxsatlar soni: {len(info.get('permissions', []))}",
     ]
+    # Komponentlar (tuzilma)
+    comp = (f"• Komponentlar: {len(info.get('activities', []))} ekran, "
+            f"{len(info.get('services', []))} xizmat, "
+            f"{len(info.get('receivers', []))} tinglovchi")
+    lines.append(comp)
+    if info.get("main_activity"):
+        lines.append(f"• Asosiy ekran: <code>{info['main_activity']}</code>")
+    if info.get("lib_archs"):
+        lines.append(f"• Native kutubxonalar: {', '.join(info['lib_archs'])}"
+                     + (f" ({', '.join(info['libs'][:4])})" if info.get("libs") else ""))
+    # Fonda ishlaydigan xizmatlar / tinglovchilar nomlari (forensik)
+    if info.get("services"):
+        lines.append("\n⚙️ <b>Fon xizmatlari</b>")
+        for s0 in info["services"][:6]:
+            lines.append(f"• <code>{s0.split('.')[-1]}</code>")
+    if info.get("receivers"):
+        lines.append("\n📡 <b>Hodisa tinglovchilari</b>")
+        for r0 in info["receivers"][:6]:
+            lines.append(f"• <code>{r0.split('.')[-1]}</code>")
     # Imzo (kim yasagan/imzolagan)
     s = info.get("signer")
     if s:
@@ -543,6 +566,14 @@ async def apk_tech_cb(c: CallbackQuery):
         lines.append("\n🌐 <b>Bog'lanadigan manzillar</b>")
         for u in info["urls"]:
             lines.append(f"• <code>{u}</code>")
+    if info.get("ips"):
+        lines.append("\n📍 <b>Topilgan IP manzillar</b>")
+        for ip in info["ips"]:
+            lines.append(f"• <code>{ip}</code>")
+    if info.get("phones"):
+        lines.append("\n📞 <b>Topilgan telefon raqamlari</b>")
+        for ph in info["phones"]:
+            lines.append(f"• <code>{ph}</code>")
     lines.append(f"\n🔑 <b>Fayl barmoq izi (SHA-256)</b>\n<code>{info['sha256']}</code>")
     lines.append("<i>VirusTotal kabi saytlarда shu raqamni qidirib, fayl "
                  "ilgari virus deb topilganini tekshirsa bo'ladi.</i>")
@@ -611,8 +642,10 @@ async def on_file(m: Message):
         await m.answer(f"⚠️ Fayl juda katta ({size_mb:.0f} MB). "
                        f"Men {config.MAX_FILE_MB} MB gacha tekshira olaman.")
         return
+    grp = is_group(m)
     if name.endswith(".apk"):
-        status = await m.answer("⏳ APK tahlil qilyapman... (ruxsatlar, kod, tokenlar)")
+        if not grp:
+            await m.answer("⏳ APK tahlil qilyapman... (ruxsatlar, kod, tokenlar)")
         tmp = tempfile.mkdtemp()
         apk_path = os.path.join(tmp, "app.apk")
         try:
@@ -626,32 +659,34 @@ async def on_file(m: Message):
                     await db.save_token(t, info["package"])
                 except Exception:
                     pass
-            LAST_APK[m.from_user.id] = info
-            await m.answer(format_apk(verdict, score, info),
-                           parse_mode="HTML",
-                           reply_markup=apk_kb(info, verdict, score))
-            await group_followup(m, verdict)
+            if grp:
+                await group_result(m, verdict, info["name"])
+            else:
+                LAST_APK[m.from_user.id] = info
+                await m.answer(format_apk(verdict, score, info),
+                               parse_mode="HTML",
+                               reply_markup=apk_kb(info, verdict, score))
         except Exception as e:
             logging.exception("APK tahlil xatosi")
-            await m.answer(f"⚠️ Bu faylni tahlil qila olmadim.\n"
-                           f"Sabab: <code>{e}</code>\n\n"
-                           f"Fayl buzilgan yoki haqiqiy APK bo'lmasligi mumkin — "
-                           f"baribir ehtiyot bo'ling.", parse_mode="HTML")
+            if not grp:
+                await m.answer(f"⚠️ Bu faylni tahlil qila olmadim.\n"
+                               f"Sabab: <code>{e}</code>\n\n"
+                               f"Fayl buzilgan yoki haqiqiy APK bo'lmasligi mumkin — "
+                               f"baribir ehtiyot bo'ling.", parse_mode="HTML")
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
     elif name.endswith(".zip"):
-        await m.answer("🔐 Arxivni ochyapman va ichidagini tekshiryapman...")
+        if not grp:
+            await m.answer("🔐 Arxivni ochyapman va ichidagini tekshiryapman...")
         tmp = tempfile.mkdtemp()
         zip_path = os.path.join(tmp, "a.zip")
         try:
             await bot.download(m.document, destination=zip_path)
-            # Parol: fayl izohidan (caption) olinadi, agar bo'lsa
             pw = (m.caption or "").split() if m.caption else []
             res = await asyncio.to_thread(analyzers.check_archive, zip_path, pw)
             st = res.get("status")
             if st == "apk":
                 info = res["info"]
-                LAST_APK[m.from_user.id] = info
                 await db.log_check(m.from_user.id, "archive", res["verdict"],
                                    res["score"], f"{info['name']} (arxivда)")
                 for t in info.get("tokens", []):
@@ -659,14 +694,19 @@ async def on_file(m: Message):
                         await db.save_token(t, info["package"])
                     except Exception:
                         pass
-                pwnote = (f"\n🔓 Parol topildi: <code>{res['password']}</code>"
-                          if res.get("password") else "")
-                await m.answer("📦 Arxiv ichida ilova (.apk) topildi va tekshirildi:"
-                               + pwnote, parse_mode="HTML")
-                await m.answer(format_apk(res["verdict"], res["score"], info),
-                               parse_mode="HTML",
-                               reply_markup=apk_kb(info, res["verdict"], res["score"]))
-                await group_followup(m, res["verdict"])
+                if grp:
+                    await group_result(m, res["verdict"], info["name"])
+                else:
+                    LAST_APK[m.from_user.id] = info
+                    pwnote = (f"\n🔓 Parol topildi: <code>{res['password']}</code>"
+                              if res.get("password") else "")
+                    await m.answer("📦 Arxiv ichida ilova (.apk) topildi va "
+                                   "tekshirildi:" + pwnote, parse_mode="HTML")
+                    await m.answer(format_apk(res["verdict"], res["score"], info),
+                                   parse_mode="HTML",
+                                   reply_markup=apk_kb(info, res["verdict"], res["score"]))
+            elif grp:
+                return  # guruhда faqat xavfli APK haqida xabar beramiz
             elif st == "locked":
                 await m.answer(
                     "🔒 <b>Arxiv parol bilan yopilgan.</b>\n\n"
@@ -685,14 +725,16 @@ async def on_file(m: Message):
                                parse_mode="HTML")
         except Exception as e:
             logging.exception("Arxiv tahlil xatosi")
-            await m.answer(f"⚠️ Arxivni tahlil qila olmadim: <code>{e}</code>",
-                           parse_mode="HTML")
+            if not grp:
+                await m.answer(f"⚠️ Arxivni tahlil qila olmadim: <code>{e}</code>",
+                               parse_mode="HTML")
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
     elif name.endswith((".rar", ".7z")):
-        await m.answer("ℹ️ Hozircha faqat .zip arxivlarni ocha olaman. "
-                       "RAR/7z keyingi versiyada.")
-    else:
+        if not grp:
+            await m.answer("ℹ️ Hozircha faqat .zip arxivlarni ocha olaman. "
+                           "RAR/7z keyingi versiyada.")
+    elif not grp:
         await m.answer("Men hozircha .apk va .zip fayllarni tekshiraman.")
 
 

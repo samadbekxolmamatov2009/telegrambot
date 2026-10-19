@@ -65,6 +65,29 @@ TG_TOKEN_RE = re.compile(r"\d{8,10}:[A-Za-z0-9_-]{35}")
 URL_RE = re.compile(r"https?://[^\s\"'<>)]+")
 IP_RE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
 EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+# Telefon raqamlar — faqat xalqaro '+' bilan (yolg'on natijani kamaytiradi)
+PHONE_RE = re.compile(r"\+\d{1,3}[\s-]?\(?\d{2,3}\)?[\s-]?\d{3}[\s-]?\d{2}[\s-]?\d{2}")
+
+# OID prefikslari (sertifikatdagi 2.5.4.x kabi — IP emas)
+_OID_PREFIX = ("2.5.", "1.2.", "1.3.", "2.16.", "0.")
+
+
+def _valid_ip(ip: str) -> bool:
+    parts = ip.split(".")
+    if len(parts) != 4:
+        return False
+    try:
+        octs = [int(p) for p in parts]
+    except ValueError:
+        return False
+    if any(o < 0 or o > 255 for o in octs):
+        return False
+    if ip.startswith(_OID_PREFIX):
+        return False
+    # Haqiqiy IP'da odatda kamida bitta oktet > 20 bo'ladi (OID shovqinini kesadi)
+    if all(o <= 20 for o in octs):
+        return False
+    return True
 
 
 def _cert_info(a):
@@ -159,6 +182,23 @@ def check_apk(path: str) -> tuple:
     info["size_kb"] = round(os.path.getsize(path) / 1024)
     info["signer"] = _cert_info(a)
     info["emails"] = []
+    info["ips"] = []
+    info["phones"] = []
+
+    # Qo'shimcha metama'lumot (maksimal ma'lumot)
+    def _safe(fn, default=None):
+        try:
+            return fn()
+        except Exception:
+            return default
+    info["min_sdk"] = _safe(a.get_min_sdk_version)
+    info["target_sdk"] = _safe(a.get_target_sdk_version)
+    info["main_activity"] = _safe(a.get_main_activity)
+    info["activities"] = _safe(a.get_activities, []) or []
+    info["services"] = _safe(a.get_services, []) or []
+    info["receivers"] = _safe(a.get_receivers, []) or []
+    info["providers"] = _safe(a.get_providers, []) or []
+    info["features"] = list(_safe(lambda: a.get_features(), []) or [])
 
     # Xavfli ruxsatlar
     for p in perms:
@@ -196,9 +236,16 @@ def check_apk(path: str) -> tuple:
                 if "api.telegram.org" in val:
                     found_signs.add("Ma'lumotni Telegram bot orqali yuboradi")
                 for em in EMAIL_RE.findall(val):
-                    if em not in info["emails"] and len(info["emails"]) < 6 \
+                    if em not in info["emails"] and len(info["emails"]) < 8 \
                             and "@android.com" not in em and "@example" not in em:
                         info["emails"].append(em)
+                for ip in IP_RE.findall(val):
+                    if ip not in info["ips"] and len(info["ips"]) < 8 \
+                            and _valid_ip(ip) and not ip.startswith(("127.", "255.")):
+                        info["ips"].append(ip)
+                for ph in PHONE_RE.findall(val):
+                    if ph not in info["phones"] and len(info["phones"]) < 8:
+                        info["phones"].append(ph)
                 for u in URL_RE.findall(val):
                     host = u[:60]
                     if host not in seen_url and "schemas.android" not in u \
@@ -222,6 +269,13 @@ def check_apk(path: str) -> tuple:
             found_signs.add("Fayllar yashirilgan (anti-analiz: ZIP shifr bayrog'i)")
             packer.append("enc_zip")
         # 2. Native kod (.so)
+        libs = sorted({n.split("/")[2] for n in names
+                       if n.startswith("lib/") and n.endswith(".so")
+                       and len(n.split("/")) > 2})
+        info["libs"] = libs
+        archs = sorted({n.split("/")[1] for n in names
+                        if n.startswith("lib/") and len(n.split("/")) > 1})
+        info["lib_archs"] = archs
         if any(n.startswith("lib/") and n.endswith(".so") for n in names):
             found_signs.add("Native kod yuklaydi (.so kutubxona)")
             packer.append("native")
